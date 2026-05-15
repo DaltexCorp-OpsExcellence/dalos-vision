@@ -1204,6 +1204,16 @@ function InspectionForm(props){
       }
       /* Edit mode: keep isSaving=true during 1.8s so user can't double-save */
       if(isEdit){
+        /* Delete any pallets the user removed — done here (after successful save) so it
+           doesn't race with the optimistic lock check at the start of the save chain */
+        if(deletedPalletIds&&deletedPalletIds.length>0){
+          var toDelete=deletedPalletIds.slice();
+          setDeletedPalletIds([]);
+          supabase.from('sample_rows').delete().in('pallet_id',toDelete)
+            .then(function(){return supabase.from('pallets').delete().in('id',toDelete);})
+            .then(function(r){if(r&&r.error)console.error('[DalOS] pallet delete error:',r.error.message);
+              else console.log('[DalOS] Deleted',toDelete.length,'pallet(s) from DB');});
+        }
         setTimeout(function(){setIsSaving(false);setSaveStatus('idle');onClose();},1800);
       } else {
         setIsSaving(false);
@@ -11713,18 +11723,6 @@ function App(){
             }
             processRow(0);
           });
-        }
-        /* DELETE pallets removed by the user during this edit session */
-        if(deletedPalletIds&&deletedPalletIds.length>0){
-          supabase.from('sample_rows').delete().in('pallet_id',deletedPalletIds)
-            .then(function(){
-              return supabase.from('pallets').delete().in('id',deletedPalletIds);
-            })
-            .then(function(r){
-              if(r&&r.error) console.error('[DalOS] pallet delete error:',r.error.message);
-              else console.log('[DalOS] Deleted',deletedPalletIds.length,'pallet(s) from DB');
-            });
-          setDeletedPalletIds([]);
         }
         /* INSERT new rows if any */
         if(newSampleRows.length>0){
