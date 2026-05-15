@@ -11740,6 +11740,17 @@ function App(){
                 })
             :Promise.resolve([]);
           insertNewPalletsPromise.then(function(insertedPallets){
+          /* Guard: if new pallets were requested but INSERT returned nothing (e.g. duplicate
+             label 23505), surface a clear error. Without this, the code silently finds the
+             existing same-labeled pallet and assigns samples to it — e.g. T-101 typed as
+             T-100 causes all new samples to go into the wrong pallet. */
+          if(newPalletObjs.length>0&&insertedPallets.length===0){
+            var failedLabels=newPalletObjs.map(function(x){return x.row.pallet_number;}).join(', ');
+            if(onDone){onDone('Pallet label already used in this session: '+failedLabels+'. Please enter a unique pallet number.',realId);onDone=null;}
+            return;
+          }
+          var insertedPalletIdSet={};
+          insertedPallets.forEach(function(p){insertedPalletIdSet[p.id]=true;});
           /* Get all pallet IDs from DB (existing + newly inserted) */
           supabase.from('pallets').select('id,pallet_number').eq('inspection_id',realId).then(function(pr){
             if(pr.error||!pr.data) return;
@@ -11774,6 +11785,13 @@ function App(){
               var savedPallet=pr.data.find(function(sp){return sp.pallet_number===expectedF;});
               if(!savedPallet){
                 console.warn('[DalOS] Edit-mode: could not match saved pallet — sample rows dropped',{palletLabel:item.pallet.palletLabel,palletNo:item.pallet.palletNo,expected:expectedF,available:pr.data.map(function(sp){return sp.pallet_number;})});
+                return;
+              }
+              /* Safety: if this pallet was supposed to be newly inserted but its ID is
+                 NOT in insertedPalletIdSet, the INSERT must have partially failed.
+                 Do NOT assign samples to the pre-existing pallet of the same name. */
+              if(newPalletObjs.length>0&&!insertedPalletIdSet[savedPallet.id]){
+                console.error('[DalOS] Edit-mode: pallet INSERT failure detected — skipping sample assignment for',expectedF);
                 return;
               }
               var palletKey=item.pallet.palletLabel||String(item.pallet.palletNo);
