@@ -14179,6 +14179,16 @@ function App(){
           var newPalletObjs=[];
           var seenNew={};
           var palletPrefixForEdit=(newBatch&&newBatch.palletPrefix)||'';
+          /* Build set of all pallet numbers currently in the UI —
+             used to detect renamed/removed pallets and delete them from DB */
+          var uiPalletNums={};
+          palletsData.forEach(function(p){
+            var lblU=(p.palletLabel||'').trim();
+            var numU;
+            if(isCropGrapesEdit){numU=lblU?(palletPrefixForEdit&&!lblU.startsWith(palletPrefixForEdit)?palletPrefixForEdit+lblU:lblU):String(p.palletNo);}
+            else{numU=p.palletNo;}
+            uiPalletNums[String(numU)]=true;
+          });
           newSampleRows.forEach(function(item){
             var p=item.pallet;
             if(typeof p.palletId==='number'&&!seenNew[p.palletNo]){
@@ -14202,7 +14212,19 @@ function App(){
               newPalletObjs.push({pallet:p,row:pr2});
             }
           });
-          var insertNewPalletsPromise=newPalletObjs.length>0
+          /* Delete orphaned pallets from DB — pallets that existed before but are
+             no longer in the UI (renamed or removed). Runs before upsert so pallet
+             count stays accurate and renamed pallets don't leave ghost rows. */
+          var orphanDeletePromise=supabase.from('pallets').select('id,pallet_number').eq('inspection_id',realId)
+            .then(function(pr){
+              if(pr.error||!pr.data||pr.data.length===0) return Promise.resolve();
+              var orphanIds=pr.data.filter(function(r){return !uiPalletNums[r.pallet_number];}).map(function(r){return r.id;});
+              if(orphanIds.length===0) return Promise.resolve();
+              console.log('[DalOS] Deleting',orphanIds.length,'orphaned pallet(s) (renamed/removed):',orphanIds);
+              return supabase.from('pallets').delete().in('id',orphanIds);
+            });
+          var insertNewPalletsPromise=orphanDeletePromise.then(function(){
+            return newPalletObjs.length>0
             ?supabase.from('pallets').upsert(newPalletObjs.map(function(x){return x.row;}),{onConflict:'inspection_id,pallet_number'}).select()
                 .then(function(r){
                   if(r.error){
@@ -14216,6 +14238,7 @@ function App(){
                   return r.data;
                 })
             :Promise.resolve([]);
+          });
           /* Fix 1: assign to newRowsChainPromise and return at every step so the
              chain propagates all the way to Promise.all — onDone now waits for
              pallets + sample rows + defects before closing the form */
