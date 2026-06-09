@@ -201,7 +201,7 @@ tr.click:hover td{background:var(--bg)}
 .cqc-list-pane{flex:1;min-width:0;transition:flex .2s}
 .cqc-list-pane.has-detail{flex:0 0 42%}
 .cqc-detail-pane{flex:1;min-width:0;position:sticky;top:16px}
-.cqc-stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.cqc-stat-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;margin-bottom:16px}.cqc-kpi{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 12px;position:relative;overflow:hidden;transition:box-shadow .15s}.cqc-kpi::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:8px 0 0 8px}
 .cqc-two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
 .cqc-two-col-bot{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .cqc-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
@@ -210,11 +210,11 @@ tr.click:hover td{background:var(--bg)}
 @media(max-width:900px){
   .cqc-list-pane.has-detail{flex:1}
   .cqc-detail-pane{display:none}
-  .cqc-stat-grid{grid-template-columns:repeat(2,1fr)}
+  .cqc-stat-grid{grid-template-columns:repeat(3,1fr)}
   .cqc-two-col,.cqc-two-col-bot{grid-template-columns:1fr}
 }
 @media(max-width:767px){
-  .cqc-stat-grid{grid-template-columns:repeat(2,1fr)}
+  .cqc-stat-grid{grid-template-columns:repeat(3,1fr)}
   .cqc-toolbar{flex-wrap:nowrap;gap:6px}
   .cqc-th-hide{display:none!important}
   .cqc-td-hide{display:none!important}
@@ -7090,8 +7090,9 @@ function HomeView(props){
     /* topbar */
     ce('div',{className:'dh-tb'},
       ce('div',{className:'dh-tb-l'},
+        
         ce('div',{className:'dh-logo'},ce('span',{style:{color:'#fff'}},'Dal'),ce('span',{style:{color:'#6fc191'}},'OS'),ce('span',{style:{color:'#5d8a6d',fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,marginLeft:4}},'Vision')),
-        ce('div',{className:'dh-ver'},DALOS_BUILD.split(' ')[0])
+        ce('div',{className:'dh-ver'},DALOS_BUILD.split(' ')[0]),ce('a',{className:'dh-pill',href:'https://daltexcorp-opsexcellence.github.io/dalos-analytics-dev/workspace.html',title:'Back to DalOS Workspace',style:{textDecoration:'none',height:28,padding:'0 11px',fontSize:11,marginLeft:4}},ce('span',{style:{display:'inline-flex',alignItems:'center',marginRight:1},dangerouslySetInnerHTML:{__html:'<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>'}}),'Workspace')
       ),
       ce('div',{className:'dh-tb-r'},
         ce('div',{className:'dh-pill dh-season-pill'},
@@ -9377,6 +9378,22 @@ function ClientQCMgmt(props){
                 result[sec.section]=Math.round(total/samples.length*100)/100;
               });
               return result;
+            })(),
+            sampleAvgTotal:(function(){
+              var samples=r.cqc_sample_rows||[];
+              if(!samples.length) return null;
+              var pid=r.product_id||'citrus';
+              var secs=(config.cqcDefectSections||{})[pid]||[];
+              var grandTotal=0;
+              secs.forEach(function(sec){
+                var secDbIds=(sec.items||[]).map(function(d){return d.dbId;});
+                samples.forEach(function(sr){
+                  (sr.cqc_sample_defect_readings||[]).forEach(function(dr){
+                    if(secDbIds.indexOf(dr.cqc_defect_id)>=0) grandTotal+=parseFloat(dr.value)||0;
+                  });
+                });
+              });
+              return Math.round(grandTotal/samples.length*100)/100;
             })()
           };
         });
@@ -9520,6 +9537,26 @@ function ClientQCMgmt(props){
   }
   /* Compute report total from samples (sum of sample totals) */
   var cqcSamplesReportTotal=Math.round(cqcSamples.reduce(function(sum,s){return sum+cqcSampleTotal(s);},0)*100)/100;
+  /* Avg total defect, avg major, avg minor across all samples */
+  var cqcAvgTotalDefect=cqcSamples.length>0?Math.round(cqcSamplesReportTotal/cqcSamples.length*100)/100:0;
+  var cqcAvgMajor=(function(){
+    if(!cqcSamples.length) return 0;
+    var pid=selCqcProd||'citrus';
+    var secs=(config.cqcDefectSections||{})[pid]||[];
+    var majorKeys=[];
+    secs.forEach(function(sec){(sec.items||[]).forEach(function(d){if(d.sev==='Major'||d.sev==='Critical')majorKeys.push(d.key);});});
+    var sum=cqcSamples.reduce(function(s,samp){return s+majorKeys.reduce(function(t,k){return t+(parseFloat((samp.defects||{})[k])||0);},0);},0);
+    return Math.round(sum/cqcSamples.length*100)/100;
+  })();
+  var cqcAvgMinor=(function(){
+    if(!cqcSamples.length) return 0;
+    var pid=selCqcProd||'citrus';
+    var secs=(config.cqcDefectSections||{})[pid]||[];
+    var minorKeys=[];
+    secs.forEach(function(sec){(sec.items||[]).forEach(function(d){if(d.sev==='Minor')minorKeys.push(d.key);});});
+    var sum=cqcSamples.reduce(function(s,samp){return s+minorKeys.reduce(function(t,k){return t+(parseFloat((samp.defects||{})[k])||0);},0);},0);
+    return Math.round(sum/cqcSamples.length*100)/100;
+  })();
   /* Auto-sync total defect field from samples */
   React.useEffect(function(){
     if(cqcSamples.length>0) setTotalDef(String(cqcSamplesReportTotal));
@@ -10058,7 +10095,7 @@ function ClientQCMgmt(props){
       trace_code:fTrace||null,
       lot_number:fLot||null,
       wax:fWax||null,
-      score:['GREEN','AMBER','RED','PASS','FAIL'].indexOf(fScore)>=0?fScore:null,
+      score:['GREEN','AMBER','RED','BLUE','PASS','FAIL'].indexOf(fScore)>=0?fScore:null,
       brix:parseFloat(fBrix)||null,
       brix_issue:fBrixIssue==='Yes',
       carton_issue:fCartonIssue==='Yes',
@@ -10503,222 +10540,262 @@ function ClientQCMgmt(props){
             fi('Client class',fClientCls,setClientCls,null)
           ),
           /* ── Grapes: variety slots ── */
-          selCqcProd==='grapes'&&ce('div',{style:{marginBottom:10}},
-            /* Slot 1 — always present */
-            ce('div',{style:{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',marginBottom:6}},
-              ce('div',{style:{background:'var(--bg2)',padding:'7px 12px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
+          selCqcProd==='grapes'&&ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:0,marginBottom:10,border:'1px solid var(--border)',borderRadius:10,overflow:'hidden'}},
+
+            /* ══ LEFT: PACKHOUSES ══ */
+            ce('div',{style:{background:'#f2f7f3',borderRight:'2px solid #b8d8bc',padding:'14px'}},
+              ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}},
                 ce('div',{style:{display:'flex',alignItems:'center',gap:8}},
-                  ce('div',{style:{width:22,height:22,borderRadius:'50%',background:'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:600,color:'#fff',flexShrink:0}},'1'),
-                  ce('span',{style:{fontSize:12,fontWeight:600,color:'var(--text)'}},'Variety 1')
+                  ce('div',{style:{width:4,height:16,background:'var(--accent)',borderRadius:2,flexShrink:0}}),
+                  ce('span',{style:{fontSize:12,fontWeight:700,textTransform:'uppercase',letterSpacing:'.08em',color:'#2e5d3a'}},'Packhouses')
                 ),
-                ce('div',{style:{display:'flex',border:'1px solid var(--border2)',borderRadius:6,overflow:'hidden'}},
-                  ['single','mixed'].map(function(t){
-                    return ce('button',{key:t,type:'button',
-                      style:{padding:'3px 12px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
-                        background:fVarType===t?'var(--accent)':'transparent',
-                        color:fVarType===t?'#fff':'var(--text3)'},
-                      onClick:function(){setVarType(t);if(t==='single'){setVar2('');setFCat2('');}}
-                    },t==='single'?'Single':'Mixed');
-                  })
-                )
+                ce('button',{className:'btn btn-secondary btn-sm',style:{fontSize:11},onClick:addPHExtra},'+ Packhouse')
               ),
-              ce('div',{style:{padding:'10px 12px'}},
-                ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:fVarType==='mixed'?8:0}},
+              /* Slot 1 — primary */
+              ce('div',{style:{border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',marginBottom:6,background:'var(--bg2)'}},
+                ce('div',{style:{fontSize:9,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--text3)',marginBottom:8}},'Slot 1 — primary'),
+                ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},
                   ce('div',{className:'form-field',style:{marginBottom:0}},
-                    ce('label',{className:'form-label'},'Category'),
-                    ce('select',{className:'form-select',value:fCat,onChange:function(e){setFCat(e.target.value);setVar('');}},
-                      ce('option',{value:''},'— All —'),
-                      ((config.categories||{})[selCqcProd]||[]).map(function(cat){return ce('option',{key:cat.id,value:cat.name},cat.name);})
+                    ce('label',{className:'form-label',style:{fontSize:10}},'Actual'),
+                    ce('select',{className:'form-select',value:fPH,onChange:function(e){setPH(e.target.value);}},
+                      ce('option',{value:''},'— Select —'),
+                      (config.packhouses||[]).map(function(p){return ce('option',{key:p.id||p,value:p.name||p},p.name||p);})
                     )
                   ),
                   ce('div',{className:'form-field',style:{marginBottom:0}},
-                    ce('label',{className:'form-label'},'Variety'),
-                    ce('select',{className:'form-select',value:fVar,onChange:function(e){
-                      var name=e.target.value;setVar(name);
-                      var allVars=(config.varietiesFull||{})[selCqcProd]||[];
-                      var found=allVars.find(function(v){return v.name===name;});
-                      if(found&&found.categoryId){var cn=(config.categoriesIdToName||{})[found.categoryId]||'';if(cn)setFCat(cn);}
-                    }},
+                    ce('label',{className:'form-label',style:{fontSize:10}},'Cover'),
+                    ce('select',{className:'form-select',value:fPhCover,onChange:function(e){setPhCover(e.target.value);}},
                       ce('option',{value:''},'— Select —'),
-                      (function(){var allVars=(config.varietiesFull||{})[selCqcProd]||[];var catId=fCat?(config.categoriesIdMap||{})[fCat]:null;var filtered=catId?allVars.filter(function(v){return v.categoryId===catId;}):allVars;return filtered.map(function(v){return ce('option',{key:v.id,value:v.name},v.name);});})()
+                      (config.packhouses||[]).map(function(p){return ce('option',{key:p.id||p,value:p.name||p},p.name||p);})
                     )
                   )
-                ),
-                fVarType==='mixed'&&ce('div',{style:{padding:'8px 10px',background:'var(--bg2)',borderRadius:6,border:'1px solid var(--border)'}},
-                  ce('div',{style:{fontSize:10,fontWeight:500,color:'#0F6E56',marginBottom:6}},'⊕ Mixed with'),
+                )
+              ),
+              /* Extra packhouse pairs */
+              fPHExtra.map(function(ph,i){
+                return ce('div',{key:'ph'+i,style:{border:'1px solid var(--border)',borderRadius:8,padding:'10px 12px',marginBottom:6,position:'relative'}},
+                  ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}},
+                    ce('span',{style:{fontSize:9,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--text3)'}},'Slot '+(i+2)),
+                    ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:16,lineHeight:1,padding:0},onClick:function(idx){return function(){removePHExtra(idx);};}(i)},'×')
+                  ),
                   ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},
                     ce('div',{className:'form-field',style:{marginBottom:0}},
-                      ce('label',{className:'form-label',style:{fontSize:10}},'Category'),
-                      ce('select',{className:'form-select',value:fCat2,onChange:function(e){setFCat2(e.target.value);setVar2('');}},
-                        ce('option',{value:''},'— All —'),
-                        ((config.categories||{})[selCqcProd]||[]).map(function(cat){return ce('option',{key:cat.id,value:cat.name},cat.name);})
+                      ce('label',{className:'form-label',style:{fontSize:10}},'Actual'),
+                      ce('select',{className:'form-select',value:ph.actual||'',onChange:function(idx){return function(e){updatePHExtra(idx,'actual',e.target.value);};}(i)},
+                        ce('option',{value:''},'— Select —'),
+                        (config.packhouses||[]).map(function(p){return ce('option',{key:p.id||p,value:p.name||p},p.name||p);})
                       )
                     ),
                     ce('div',{className:'form-field',style:{marginBottom:0}},
-                      ce('label',{className:'form-label',style:{fontSize:10}},'Variety'),
-                      ce('select',{className:'form-select',value:fVar2,onChange:function(e){
-                        var name=e.target.value;setVar2(name);
-                        var allVars=(config.varietiesFull||{})[selCqcProd]||[];
-                        var found=allVars.find(function(v){return v.name===name;});
-                        if(found&&found.categoryId){var cn=(config.categoriesIdToName||{})[found.categoryId]||'';if(cn)setFCat2(cn);}
-                      }},
+                      ce('label',{className:'form-label',style:{fontSize:10}},'Cover'),
+                      ce('select',{className:'form-select',value:ph.cover||'',onChange:function(idx){return function(e){updatePHExtra(idx,'cover',e.target.value);};}(i)},
                         ce('option',{value:''},'— Select —'),
-                        (function(){var allVars=(config.varietiesFull||{})[selCqcProd]||[];var catId=fCat2?(config.categoriesIdMap||{})[fCat2]:null;var filtered=catId?allVars.filter(function(v){return v.categoryId===catId;}):allVars;return filtered.map(function(v){return ce('option',{key:v.id,value:v.name},v.name);});})()
+                        (config.packhouses||[]).map(function(p){return ce('option',{key:p.id||p,value:p.name||p},p.name||p);})
                       )
                     )
-                  ),
-                  ce('div',{style:{marginTop:5,fontSize:10,color:'var(--text3)'}},'Sampled together — readings averaged across the mix')
-                )
-              )
+                  )
+                );
+              })
             ),
-            /* Extra variety slots (2+) */
-            fVarsExtra.map(function(ve,i){
-              var allVars=(config.varietiesFull||{})[selCqcProd]||[];
-              var catId=ve.cat?(config.categoriesIdMap||{})[ve.cat]:null;
-              var filtered=catId?allVars.filter(function(v){return v.categoryId===catId;}):allVars;
-              var catId2=ve.cat2?(config.categoriesIdMap||{})[ve.cat2]:null;
-              var filtered2=catId2?allVars.filter(function(v){return v.categoryId===catId2;}):allVars;
-              return ce('div',{key:'ve'+i,style:{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',marginBottom:6}},
-                ce('div',{style:{background:'var(--bg2)',padding:'7px 12px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
-                  ce('div',{style:{display:'flex',alignItems:'center',gap:8}},
-                    ce('div',{style:{width:22,height:22,borderRadius:'50%',background:'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:600,color:'#fff',flexShrink:0}},i+2),
-                    ce('span',{style:{fontSize:12,fontWeight:600,color:'var(--text)'}},'Variety '+(i+2))
+
+            /* ══ RIGHT: VARIETY + FARM/PLOT ══ */
+            ce('div',{style:{background:'var(--bg)',padding:'14px'}},
+              /* ─ Varieties ─ */
+              ce('div',{style:{marginBottom:10}},
+                ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}},
+                  ce('div',{style:{display:'flex',alignItems:'center',gap:6}},
+                    ce('div',{style:{width:3,height:13,background:'#7a3a9a',borderRadius:2,flexShrink:0}}),
+                    ce('span',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'.07em',color:'var(--text3)'}},'Varieties')
                   ),
-                  ce('div',{style:{display:'flex',alignItems:'center',gap:8}},
+                  ce('button',{className:'btn btn-secondary btn-sm',style:{fontSize:11},onClick:addVarExtra},'+ Add variety')
+                ),
+                /* Slot 1 */
+                ce('div',{style:{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',marginBottom:6}},
+                  ce('div',{style:{background:'var(--bg2)',padding:'7px 12px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
+                    ce('span',{style:{fontSize:10,fontWeight:500,color:'var(--text3)'}},'Slot 1 — primary'),
                     ce('div',{style:{display:'flex',border:'1px solid var(--border2)',borderRadius:6,overflow:'hidden'}},
                       ['single','mixed'].map(function(t){
                         return ce('button',{key:t,type:'button',
-                          style:{padding:'3px 12px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
-                            background:ve.type===t?'var(--accent)':'transparent',
-                            color:ve.type===t?'#fff':'var(--text3)'},
-                          onClick:function(idx,type){return function(){updateVarExtra(idx,'type',type);if(type==='single'){updateVarExtra(idx,'cat2','');updateVarExtra(idx,'var2','');}};}(i,t)
+                          style:{padding:'2px 10px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
+                            background:fVarType===t?'var(--accent)':'transparent',
+                            color:fVarType===t?'#fff':'var(--text3)'},
+                          onClick:function(){setVarType(t);if(t==='single'){setVar2('');setFCat2('');}}
                         },t==='single'?'Single':'Mixed');
                       })
-                    ),
-                    ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:18,lineHeight:1,padding:'0 2px'},onClick:function(idx){return function(){removeVarExtra(idx);};}(i)},'×')
-                  )
-                ),
-                ce('div',{style:{padding:'10px 12px'}},
-                  ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:ve.type==='mixed'?8:0}},
-                    ce('div',{className:'form-field',style:{marginBottom:0}},
-                      ce('label',{className:'form-label'},'Category'),
-                      ce('select',{className:'form-select',value:ve.cat||'',onChange:function(idx){return function(e){updateVarExtra(idx,'cat',e.target.value);};}(i)},
-                        ce('option',{value:''},'— All —'),
-                        ((config.categories||{})[selCqcProd]||[]).map(function(cat){return ce('option',{key:cat.id,value:cat.name},cat.name);})
-                      )
-                    ),
-                    ce('div',{className:'form-field',style:{marginBottom:0}},
-                      ce('label',{className:'form-label'},'Variety'),
-                      ce('select',{className:'form-select',value:ve.var||'',onChange:function(idx,allV,catIdToName){return function(e){
-                          var name=e.target.value;
-                          var f=name?allV.find(function(v){return v.name===name;}):null;
-                          var cn=f&&f.categoryId?(catIdToName||{})[f.categoryId]||'':'';
-                          setVarsExtra(function(p){return p.map(function(x,j){if(j!==idx)return x;var n=Object.assign({},x,{'var':name});if(cn)n['cat']=cn;return n;});});
-                        };}(i,allVars,config.categoriesIdToName)},
-                        ce('option',{value:''},'— Select —'),
-                        filtered.map(function(v){return ce('option',{key:v.id,value:v.name},v.name);})
-                      )
                     )
                   ),
-                  ve.type==='mixed'&&ce('div',{style:{padding:'8px 10px',background:'var(--bg2)',borderRadius:6,border:'1px solid var(--border)'}},
-                    ce('div',{style:{fontSize:10,fontWeight:500,color:'#0F6E56',marginBottom:6}},'⊕ Mixed with'),
-                    ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},
+                  ce('div',{style:{padding:'10px 12px'}},
+                    ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:fVarType==='mixed'?8:0}},
                       ce('div',{className:'form-field',style:{marginBottom:0}},
                         ce('label',{className:'form-label',style:{fontSize:10}},'Category'),
-                        ce('select',{className:'form-select',value:ve.cat2||'',onChange:function(idx){return function(e){updateVarExtra(idx,'cat2',e.target.value);};}(i)},
+                        ce('select',{className:'form-select',value:fCat,onChange:function(e){setFCat(e.target.value);setVar('');}},
                           ce('option',{value:''},'— All —'),
                           ((config.categories||{})[selCqcProd]||[]).map(function(cat){return ce('option',{key:cat.id,value:cat.name},cat.name);})
                         )
                       ),
                       ce('div',{className:'form-field',style:{marginBottom:0}},
                         ce('label',{className:'form-label',style:{fontSize:10}},'Variety'),
-                        ce('select',{className:'form-select',value:ve.var2||'',onChange:function(idx,allV,catIdToName){return function(e){
-                            var name=e.target.value;
-                            var f=name?allV.find(function(v){return v.name===name;}):null;
-                            var cn=f&&f.categoryId?(catIdToName||{})[f.categoryId]||'':'';
-                            setVarsExtra(function(p){return p.map(function(x,j){if(j!==idx)return x;var n=Object.assign({},x,{'var2':name});if(cn)n['cat2']=cn;return n;});});
-                          };}(i,allVars,config.categoriesIdToName)},
+                        ce('select',{className:'form-select',value:fVar,onChange:function(e){
+                          var name=e.target.value;setVar(name);
+                          var allVars=(config.varietiesFull||{})[selCqcProd]||[];
+                          var found=allVars.find(function(v){return v.name===name;});
+                          if(found&&found.categoryId){var cn=(config.categoriesIdToName||{})[found.categoryId]||'';if(cn)setFCat(cn);}
+                        }},
                           ce('option',{value:''},'— Select —'),
-                          filtered2.map(function(v){return ce('option',{key:v.id,value:v.name},v.name);})
+                          (function(){var allVars=(config.varietiesFull||{})[selCqcProd]||[];var catId=fCat?(config.categoriesIdMap||{})[fCat]:null;var filtered=catId?allVars.filter(function(v){return v.categoryId===catId;}):allVars;return filtered.map(function(v){return ce('option',{key:v.id,value:v.name},v.name);});})()
                         )
                       )
                     ),
-                    ce('div',{style:{marginTop:5,fontSize:10,color:'var(--text3)'}},'Sampled together — readings averaged across the mix')
+                    fVarType==='mixed'&&ce('div',{style:{padding:'8px 10px',background:'var(--bg2)',borderRadius:6,border:'1px solid var(--border)'}},
+                      ce('div',{style:{fontSize:10,fontWeight:500,color:'#0F6E56',marginBottom:6}},'\u2295 Mixed with'),
+                      ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},
+                        ce('div',{className:'form-field',style:{marginBottom:0}},
+                          ce('label',{className:'form-label',style:{fontSize:10}},'Category'),
+                          ce('select',{className:'form-select',value:fCat2,onChange:function(e){setFCat2(e.target.value);setVar2('');}},
+                            ce('option',{value:''},'— All —'),
+                            ((config.categories||{})[selCqcProd]||[]).map(function(cat){return ce('option',{key:cat.id,value:cat.name},cat.name);})
+                          )
+                        ),
+                        ce('div',{className:'form-field',style:{marginBottom:0}},
+                          ce('label',{className:'form-label',style:{fontSize:10}},'Variety'),
+                          ce('select',{className:'form-select',value:fVar2,onChange:function(e){
+                            var name=e.target.value;setVar2(name);
+                            var allVars=(config.varietiesFull||{})[selCqcProd]||[];
+                            var found=allVars.find(function(v){return v.name===name;});
+                            if(found&&found.categoryId){var cn=(config.categoriesIdToName||{})[found.categoryId]||'';if(cn)setFCat2(cn);}
+                          }},
+                            ce('option',{value:''},'— Select —'),
+                            (function(){var allVars=(config.varietiesFull||{})[selCqcProd]||[];var catId=fCat2?(config.categoriesIdMap||{})[fCat2]:null;var filtered=catId?allVars.filter(function(v){return v.categoryId===catId;}):allVars;return filtered.map(function(v){return ce('option',{key:v.id,value:v.name},v.name);});})()
+                          )
+                        )
+                      ),
+                      ce('div',{style:{marginTop:5,fontSize:10,color:'var(--text3)'}},'Sampled together \u2014 readings averaged across the mix')
+                    )
                   )
-                )
-              );
-            }),
-            ce('button',{className:'btn btn-secondary btn-sm',style:{width:'100%',marginTop:2},onClick:addVarExtra},'+ Add variety')
-          ),
-                    /* Packhouses + Farms */
-          ce('div',{style:{marginBottom:10}},
-            ce('div',{className:'grid4',style:{marginBottom:6}},
-              fi('Packhouse (actual)',fPH,setPH,(config.packhouses||[]).map(function(p){return p.name;}),true),
-              fi('Packhouse (cover)',fPhCover,setPhCover,(config.packhouses||[]).map(function(p){return p.name;}),true),
-              /* Farm 1 + Plot 1 */
-              ce('div',{className:'form-field'},
-                ce('label',{className:'form-label'},'Farm / Raw source 1'),
-                ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}},
-                  ce('select',{className:'form-select',value:fFarm1,onChange:function(e){setFarm1(e.target.value);}},
-                    ce('option',{value:''},'— Select —'),
-                    (config.farms||[]).map(function(f){return ce('option',{key:f,value:f},f);})
-                  ),
-                  ce('input',{className:'form-input',value:fPlot1,onChange:function(e){setPlot1(e.target.value);},placeholder:'Plot'})
-                )
+                ),
+                /* Extra variety slots */
+                fVarsExtra.map(function(ve,i){
+                  var allVars=(config.varietiesFull||{})[selCqcProd]||[];
+                  var catId=ve.cat?(config.categoriesIdMap||{})[ve.cat]:null;
+                  var filtered=catId?allVars.filter(function(v){return v.categoryId===catId;}):allVars;
+                  var catId2=ve.cat2?(config.categoriesIdMap||{})[ve.cat2]:null;
+                  var filtered2=catId2?allVars.filter(function(v){return v.categoryId===catId2;}):allVars;
+                  return ce('div',{key:'ve'+i,style:{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden',marginBottom:6}},
+                    ce('div',{style:{background:'var(--bg2)',padding:'7px 12px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
+                      ce('span',{style:{fontSize:10,fontWeight:500,color:'var(--text3)'}},'Slot '+(i+2)),
+                      ce('div',{style:{display:'flex',alignItems:'center',gap:8}},
+                        ce('div',{style:{display:'flex',border:'1px solid var(--border2)',borderRadius:6,overflow:'hidden'}},
+                          ['single','mixed'].map(function(t){
+                            return ce('button',{key:t,type:'button',
+                              style:{padding:'2px 10px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
+                                background:ve.type===t?'var(--accent)':'transparent',
+                                color:ve.type===t?'#fff':'var(--text3)'},
+                              onClick:function(idx,type){return function(){updateVarExtra(idx,'type',type);if(type==='single'){updateVarExtra(idx,'cat2','');updateVarExtra(idx,'var2','');}};}(i,t)
+                            },t==='single'?'Single':'Mixed');
+                          })
+                        ),
+                        ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:18,lineHeight:1,padding:'0 2px'},onClick:function(idx){return function(){removeVarExtra(idx);};}(i)},'\u00d7')
+                      )
+                    ),
+                    ce('div',{style:{padding:'10px 12px'}},
+                      ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:ve.type==='mixed'?8:0}},
+                        ce('div',{className:'form-field',style:{marginBottom:0}},
+                          ce('label',{className:'form-label',style:{fontSize:10}},'Category'),
+                          ce('select',{className:'form-select',value:ve.cat||'',onChange:function(idx){return function(e){updateVarExtra(idx,'cat',e.target.value);};}(i)},
+                            ce('option',{value:''},'— All —'),
+                            ((config.categories||{})[selCqcProd]||[]).map(function(cat){return ce('option',{key:cat.id,value:cat.name},cat.name);})
+                          )
+                        ),
+                        ce('div',{className:'form-field',style:{marginBottom:0}},
+                          ce('label',{className:'form-label',style:{fontSize:10}},'Variety'),
+                          ce('select',{className:'form-select',value:ve.var||'',onChange:function(idx,allV,catIdToName){return function(e){
+                            var name=e.target.value;
+                            var f=name?allV.find(function(v){return v.name===name;}):null;
+                            var cn=f&&f.categoryId?(catIdToName||{})[f.categoryId]||'':'';
+                            setVarsExtra(function(p){return p.map(function(x,j){if(j!==idx)return x;var n=Object.assign({},x,{'var':name});if(cn)n['cat']=cn;return n;});});
+                          };}(i,allVars,config.categoriesIdToName)},
+                            ce('option',{value:''},'— Select —'),
+                            filtered.map(function(v){return ce('option',{key:v.id,value:v.name},v.name);})
+                          )
+                        )
+                      ),
+                      ve.type==='mixed'&&ce('div',{style:{padding:'8px 10px',background:'var(--bg2)',borderRadius:6,border:'1px solid var(--border)'}},
+                        ce('div',{style:{fontSize:10,fontWeight:500,color:'#0F6E56',marginBottom:6}},'\u2295 Mixed with'),
+                        ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},
+                          ce('div',{className:'form-field',style:{marginBottom:0}},
+                            ce('label',{className:'form-label',style:{fontSize:10}},'Category'),
+                            ce('select',{className:'form-select',value:ve.cat2||'',onChange:function(idx){return function(e){updateVarExtra(idx,'cat2',e.target.value);};}(i)},
+                              ce('option',{value:''},'— All —'),
+                              ((config.categories||{})[selCqcProd]||[]).map(function(cat){return ce('option',{key:cat.id,value:cat.name},cat.name);})
+                            )
+                          ),
+                          ce('div',{className:'form-field',style:{marginBottom:0}},
+                            ce('label',{className:'form-label',style:{fontSize:10}},'Variety'),
+                            ce('select',{className:'form-select',value:ve.var2||'',onChange:function(idx,allV,catIdToName){return function(e){
+                              var name=e.target.value;
+                              var f=name?allV.find(function(v){return v.name===name;}):null;
+                              var cn=f&&f.categoryId?(catIdToName||{})[f.categoryId]||'':'';
+                              setVarsExtra(function(p){return p.map(function(x,j){if(j!==idx)return x;var n=Object.assign({},x,{'var2':name});if(cn)n['cat2']=cn;return n;});});
+                            };}(i,allVars,config.categoriesIdToName)},
+                              ce('option',{value:''},'— Select —'),
+                              filtered2.map(function(v){return ce('option',{key:v.id,value:v.name},v.name);})
+                            )
+                          )
+                        ),
+                        ce('div',{style:{marginTop:5,fontSize:10,color:'var(--text3)'}},'Sampled together \u2014 readings averaged across the mix')
+                      )
+                    )
+                  );
+                })
               ),
-              /* Farm 2 + Plot 2 */
-              ce('div',{className:'form-field'},
-                ce('label',{className:'form-label'},'Farm / Raw source 2'),
-                ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}},
-                  ce('select',{className:'form-select',value:fFarm2,onChange:function(e){setFarm2(e.target.value);}},
-                    ce('option',{value:''},'— Select —'),
-                    (config.farms||[]).map(function(f){return ce('option',{key:f,value:f},f);})
+              /* ─ Farms / Raw Sources ─ */
+              ce('div',null,
+                ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}},
+                  ce('div',{style:{display:'flex',alignItems:'center',gap:6}},
+                    ce('div',{style:{width:3,height:13,background:'#ba7517',borderRadius:2,flexShrink:0}}),
+                    ce('span',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'.07em',color:'var(--text3)'}},'Farms / Raw sources')
                   ),
-                  ce('input',{className:'form-input',value:fPlot2,onChange:function(e){setPlot2(e.target.value);},placeholder:'Plot'})
-                )
-              )
-            ),
-            /* Grapes: extra packhouses and farms */
-            selCqcProd==='grapes'&&ce('div',null,
-              /* Extra packhouses — actual + cover per row */
-              fPHExtra.map(function(ph,i){
-                return ce('div',{key:'ph'+i,style:{display:'grid',gridTemplateColumns:'1fr 1fr auto',gap:6,marginBottom:6,alignItems:'end'}},
+                  ce('button',{className:'btn btn-secondary btn-sm',style:{fontSize:11},onClick:addFarmExtra},'+ Farm')
+                ),
+                /* Farm 1 + 2 always visible */
+                ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:6}},
                   ce('div',{className:'form-field',style:{marginBottom:0}},
-                    ce('label',{className:'form-label'},'Packhouse actual '+(i+2)),
-                    ce('select',{className:'form-select',value:ph.actual||'',onChange:function(idx){return function(e){updatePHExtra(idx,'actual',e.target.value);};}(i)},
-                      ce('option',{value:''},'— Select —'),
-                      (config.packhouses||[]).map(function(p){return ce('option',{key:p.id||p,value:p.name||p},p.name||p);})
-                    )
-                  ),
-                  ce('div',{className:'form-field',style:{marginBottom:0}},
-                    ce('label',{className:'form-label'},'Packhouse cover '+(i+2)),
-                    ce('select',{className:'form-select',value:ph.cover||'',onChange:function(idx){return function(e){updatePHExtra(idx,'cover',e.target.value);};}(i)},
-                      ce('option',{value:''},'— Select —'),
-                      (config.packhouses||[]).map(function(p){return ce('option',{key:p.id||p,value:p.name||p},p.name||p);})
-                    )
-                  ),
-                  ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:18,paddingBottom:6},onClick:function(idx){return function(){removePHExtra(idx);};}(i)},'×')
-                );
-              }),
-              /* Extra farms */
-              fFarmsExtra.map(function(fe,i){
-                return ce('div',{key:'frm'+i,style:{display:'grid',gridTemplateColumns:'1fr auto',gap:6,marginBottom:6,alignItems:'end'}},
-                  ce('div',{className:'form-field',style:{marginBottom:0}},
-                    ce('label',{className:'form-label'},'Farm / Raw source '+(i+3)),
-                    ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}},
-                      ce('select',{className:'form-select',value:fe.farm||'',onChange:function(idx){return function(e){updateFarmExtra(idx,'farm',e.target.value);};}(i)},
+                    ce('label',{className:'form-label',style:{fontSize:10}},'Farm 1'),
+                    ce('div',{style:{display:'grid',gridTemplateColumns:'1fr auto',gap:4}},
+                      ce('select',{className:'form-select',value:fFarm1,onChange:function(e){setFarm1(e.target.value);}},
                         ce('option',{value:''},'— Select —'),
                         (config.farms||[]).map(function(f){return ce('option',{key:f,value:f},f);})
                       ),
-                      ce('input',{className:'form-input',value:fe.plot||'',onChange:function(idx){return function(e){updateFarmExtra(idx,'plot',e.target.value);};}(i),placeholder:'Plot'})
+                      ce('input',{className:'form-input',value:fPlot1,onChange:function(e){setPlot1(e.target.value);},placeholder:'Plot',style:{width:54}})
                     )
                   ),
-                  ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:18,paddingBottom:6},onClick:function(idx){return function(){removeFarmExtra(idx);};}(i)},'×')
-                );
-              }),
-              ce('div',{style:{display:'flex',gap:8,marginTop:4}},
-                ce('button',{className:'btn btn-secondary btn-sm',onClick:addPHExtra},'+ Packhouse'),
-                ce('button',{className:'btn btn-secondary btn-sm',onClick:addFarmExtra},'+ Farm')
+                  ce('div',{className:'form-field',style:{marginBottom:0}},
+                    ce('label',{className:'form-label',style:{fontSize:10}},'Farm 2'),
+                    ce('div',{style:{display:'grid',gridTemplateColumns:'1fr auto',gap:4}},
+                      ce('select',{className:'form-select',value:fFarm2,onChange:function(e){setFarm2(e.target.value);}},
+                        ce('option',{value:''},'— Select —'),
+                        (config.farms||[]).map(function(f){return ce('option',{key:f,value:f},f);})
+                      ),
+                      ce('input',{className:'form-input',value:fPlot2,onChange:function(e){setPlot2(e.target.value);},placeholder:'Plot',style:{width:54}})
+                    )
+                  )
+                ),
+                /* Extra farms */
+                fFarmsExtra.map(function(fe,i){
+                  return ce('div',{key:'frm'+i,style:{display:'grid',gridTemplateColumns:'1fr auto',gap:6,marginBottom:6,alignItems:'end'}},
+                    ce('div',{className:'form-field',style:{marginBottom:0}},
+                      ce('label',{className:'form-label',style:{fontSize:10}},'Farm '+(i+3)),
+                      ce('div',{style:{display:'grid',gridTemplateColumns:'1fr auto',gap:4}},
+                        ce('select',{className:'form-select',value:fe.farm||'',onChange:function(idx){return function(e){updateFarmExtra(idx,'farm',e.target.value);};}(i)},
+                          ce('option',{value:''},'— Select —'),
+                          (config.farms||[]).map(function(f){return ce('option',{key:f,value:f},f);})
+                        ),
+                        ce('input',{className:'form-input',value:fe.plot||'',onChange:function(idx){return function(e){updateFarmExtra(idx,'plot',e.target.value);};}(i),placeholder:'Plot',style:{width:54}})
+                      )
+                    ),
+                    ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:18,paddingBottom:6},onClick:function(idx){return function(){removeFarmExtra(idx);};}(i)},'\u00d7')
+                  );
+                })
               )
             )
           ),
@@ -10785,7 +10862,7 @@ function ClientQCMgmt(props){
               ce('label',{className:'form-label'},'Client score / status'),
               ce('select',{className:'form-select',value:fScore,onChange:function(e){setScore(e.target.value);}},
                 ce('option',{value:''},'— Select —'),
-                ['GREEN','AMBER','RED','PASS','FAIL'].map(function(s){return ce('option',{key:s,value:s},s);})
+                ['GREEN','AMBER','RED','BLUE','PASS','FAIL'].map(function(s){return ce('option',{key:s,value:s},s);})
               )
             ),
             fi('Max temperature (\u00b0C)',fMaxTemp,setMaxTemp),
@@ -10819,28 +10896,67 @@ function ClientQCMgmt(props){
         ),
         /* ── CQC SAMPLE READINGS ── */
         ce('div',{className:'card',style:{marginBottom:12,padding:0,overflow:'visible'}},
-          ce('div',{style:{padding:'12px 16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',background:'var(--bg2)'}},
-            ce('div',{className:'section-title',style:{marginBottom:0}},
-              ce('div',{className:'section-title-bar',style:{background:'#3a7a4a'}}),
-              'Client sample readings'
-            ),
-            ce('div',{style:{display:'flex',alignItems:'center',gap:10}},
-              cqcSamples.length>0&&ce('span',{style:{fontSize:13,color:cqcSamplesReportTotal>10?'var(--red)':cqcSamplesReportTotal>5?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)',fontWeight:700}},
-                'Total defect: '+cqcSamplesReportTotal.toFixed(2)+'%'
+          ce('div',{style:{padding:'10px 16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',background:'var(--bg2)'}},
+            /* Single row: [title + pills] left | [controls] right */
+            ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10,width:'100%'}},
+              /* Left: title + pills */
+              ce('div',{style:{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0,overflow:'hidden'}},
+                ce('div',{className:'section-title',style:{marginBottom:0,flexShrink:0}},
+                  ce('div',{className:'section-title-bar',style:{background:'#3a7a4a'}}),
+                  'Client sample readings'
+                ),
+              /* Live stat pills — appear once samples exist */
+              cqcSamples.length>0&&ce('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'nowrap',overflow:'hidden',minWidth:0}},
+                /* Avg Total */
+                ce('div',{style:{display:'flex',alignItems:'center',gap:5,padding:'3px 10px',borderRadius:20,flexShrink:0,
+                  background:cqcAvgTotalDefect>10?'#fdf0ee':cqcAvgTotalDefect>5?'#fef6e8':'#eef6ef',
+                  border:'1.5px solid '+(cqcAvgTotalDefect>10?'#e8c2bc':cqcAvgTotalDefect>5?'#f0d8a0':'#b8d8bc')}},
+                  ce('span',{style:{fontSize:9,letterSpacing:'.07em',textTransform:'uppercase',fontWeight:700,
+                    color:cqcAvgTotalDefect>10?'#8a2020':cqcAvgTotalDefect>5?'#7a4a10':'#1a4a22'}},'Avg'),
+                  ce('span',{style:{fontFamily:'var(--font-mono)',fontWeight:700,fontSize:13,
+                    color:cqcAvgTotalDefect>10?'var(--red)':cqcAvgTotalDefect>5?'var(--amber)':'var(--green)'}},
+                    cqcAvgTotalDefect.toFixed(2)+'%')
+                ),
+                /* Divider */
+                ce('div',{style:{width:1,height:16,background:'var(--border2)',flexShrink:0}}),
+                /* Major */
+                ce('div',{style:{display:'flex',alignItems:'center',gap:4,padding:'3px 9px',borderRadius:20,flexShrink:0,
+                  background:cqcAvgMajor>5?'#fdf0ee':'#f5efef',
+                  border:'1px solid '+(cqcAvgMajor>5?'#e8c2bc':'#ddd0d0')}},
+                  ce('span',{style:{fontSize:9,letterSpacing:'.06em',textTransform:'uppercase',fontWeight:700,color:'#8a2020'}},'Maj'),
+                  ce('span',{style:{fontFamily:'var(--font-mono)',fontWeight:600,fontSize:12,
+                    color:cqcAvgMajor>5?'var(--red)':'#b52828'}},
+                    cqcAvgMajor.toFixed(2)+'%')
+                ),
+                /* Minor */
+                ce('div',{style:{display:'flex',alignItems:'center',gap:4,padding:'3px 9px',borderRadius:20,flexShrink:0,
+                  background:cqcAvgMinor>5?'#fef6e8':'#f5f2e8',
+                  border:'1px solid '+(cqcAvgMinor>5?'#f0d8a0':'#ddd4a0')}},
+                  ce('span',{style:{fontSize:9,letterSpacing:'.06em',textTransform:'uppercase',fontWeight:700,color:'#7a4a10'}},'Min'),
+                  ce('span',{style:{fontFamily:'var(--font-mono)',fontWeight:600,fontSize:12,
+                    color:cqcAvgMinor>5?'var(--amber)':'#8a6010'}},
+                    cqcAvgMinor.toFixed(2)+'%')
+                ),
+                /* Samples count */
+                ce('span',{style:{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)',flexShrink:0}},
+                  cqcSamples.length+' sample'+(cqcSamples.length===1?'':'s'))
               ),
-              /* View toggle */
-              ce('div',{style:{display:'flex',border:'1px solid var(--border2)',borderRadius:6,overflow:'hidden'}},
-                ['grid','card'].map(function(mode){
-                  var active=cqcViewMode===mode;
-                  return ce('button',{key:mode,
-                    style:{padding:'4px 12px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
-                      background:active?'var(--accent)':'var(--bg2)',
-                      color:active?'#fff':'var(--text3)'},
-                    onClick:function(){setCqcViewMode(mode);}
-                  },mode==='grid'?'\u22ee Grid':'Card');
-                })
-              ),
-              ce('button',{className:'btn btn-primary btn-sm',onClick:addCqcSample},'+ Add sample')
+              ), /* close left section */
+              /* Controls — right side */
+              ce('div',{style:{display:'flex',alignItems:'center',gap:8,flexShrink:0}},
+                ce('div',{style:{display:'flex',border:'1px solid var(--border2)',borderRadius:6,overflow:'hidden'}},
+                  ['grid','card'].map(function(mode){
+                    var active=cqcViewMode===mode;
+                    return ce('button',{key:mode,
+                      style:{padding:'4px 12px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
+                        background:active?'var(--accent)':'var(--bg2)',
+                        color:active?'#fff':'var(--text3)'},
+                      onClick:function(){setCqcViewMode(mode);}
+                    },mode==='grid'?'\u22ee Grid':'Card');
+                  })
+                ),
+                ce('button',{className:'btn btn-primary btn-sm',onClick:addCqcSample},'+ Add sample')
+              )
             )
           ),
           cqcSamples.length===0
@@ -11144,40 +11260,55 @@ function ClientQCMgmt(props){
                       })(),
                       /* Brix reading */
                       ce('td',{style:tdMeta},
-                        ce('input',{style:Object.assign({},inSt,{width:58,textAlign:'right',fontFamily:'var(--font-mono)'}),type:'number',step:'0.1',min:'0',value:sample.brix||'',placeholder:'—',onChange:function(idx){return function(e){updateCqcSampleField(idx,'brix',e.target.value);};}(si)})
+                        ce('input',{style:Object.assign({},inSt,{width:58,textAlign:'right',fontFamily:'var(--font-mono)'}),'data-meta-row':si,'data-meta-col':0,type:'number',step:'0.1',min:'0',value:sample.brix||'',placeholder:'—',
+                          onChange:function(idx){return function(e){updateCqcSampleField(idx,'brix',e.target.value);};}(si),
+                          onKeyDown:function(e){if(e.key==='Enter'&&e.altKey){e.preventDefault();var nr=parseInt(e.target.getAttribute('data-meta-row'))+1;var nc=e.target.getAttribute('data-meta-col');var t=document.querySelector('.cqc-grid [data-meta-row="'+nr+'"][data-meta-col="'+nc+'"]')||document.querySelector('.cqc-grid [data-meta-row="0"][data-meta-col="'+nc+'"]');if(t)t.focus();}}
+                        })
                       ),
                       /* Brix issue */
                       ce('td',{style:tdMeta},
-                        ce('select',{style:selSt,value:sample.brixIssue?'Yes':'No',onChange:function(idx){return function(e){updateCqcSampleField(idx,'brixIssue',e.target.value==='Yes');};}(si)},
-                          ce('option',{value:'No'},'No'),ce('option',{value:'Yes'},'Yes')
-                        )
+                        ce('select',{style:selSt,'data-meta-row':si,'data-meta-col':1,value:sample.brixIssue?'Yes':'No',
+                          onChange:function(idx){return function(e){updateCqcSampleField(idx,'brixIssue',e.target.value==='Yes');};}(si),
+                          onKeyDown:function(e){if(e.key==='Enter'&&e.altKey){e.preventDefault();var nr=parseInt(e.target.getAttribute('data-meta-row'))+1;var nc=e.target.getAttribute('data-meta-col');var t=document.querySelector('.cqc-grid [data-meta-row="'+nr+'"][data-meta-col="'+nc+'"]')||document.querySelector('.cqc-grid [data-meta-row="0"][data-meta-col="'+nc+'"]');if(t)t.focus();}}
+                        },ce('option',{value:'No'},'No'),ce('option',{value:'Yes'},'Yes'))
                       ),
                       /* Avg size */
                       ce('td',{style:tdMeta},
-                        ce('input',{style:inSt,type:'number',step:'0.1',min:'0',value:sample.avgSize||'',placeholder:'—',onChange:function(idx){return function(e){updateCqcSampleField(idx,'avgSize',e.target.value);};}(si)})
+                        ce('input',{style:inSt,'data-meta-row':si,'data-meta-col':2,type:'number',step:'0.1',min:'0',value:sample.avgSize||'',placeholder:'—',
+                          onChange:function(idx){return function(e){updateCqcSampleField(idx,'avgSize',e.target.value);};}(si),
+                          onKeyDown:function(e){if(e.key==='Enter'&&e.altKey){e.preventDefault();var nr=parseInt(e.target.getAttribute('data-meta-row'))+1;var nc=e.target.getAttribute('data-meta-col');var t=document.querySelector('.cqc-grid [data-meta-row="'+nr+'"][data-meta-col="'+nc+'"]')||document.querySelector('.cqc-grid [data-meta-row="0"][data-meta-col="'+nc+'"]');if(t)t.focus();}}
+                        })
                       ),
                       /* Size issue */
                       ce('td',{style:tdMeta},
-                        ce('select',{style:selSt,value:sample.sizeIssue?'Yes':'No',onChange:function(idx){return function(e){updateCqcSampleField(idx,'sizeIssue',e.target.value==='Yes');};}(si)},
-                          ce('option',{value:'No'},'No'),ce('option',{value:'Yes'},'Yes')
-                        )
+                        ce('select',{style:selSt,'data-meta-row':si,'data-meta-col':3,value:sample.sizeIssue?'Yes':'No',
+                          onChange:function(idx){return function(e){updateCqcSampleField(idx,'sizeIssue',e.target.value==='Yes');};}(si),
+                          onKeyDown:function(e){if(e.key==='Enter'&&e.altKey){e.preventDefault();var nr=parseInt(e.target.getAttribute('data-meta-row'))+1;var nc=e.target.getAttribute('data-meta-col');var t=document.querySelector('.cqc-grid [data-meta-row="'+nr+'"][data-meta-col="'+nc+'"]')||document.querySelector('.cqc-grid [data-meta-row="0"][data-meta-col="'+nc+'"]');if(t)t.focus();}}
+                        },ce('option',{value:'No'},'No'),ce('option',{value:'Yes'},'Yes'))
                       ),
                       /* Carton issue */
                       ce('td',{style:tdMeta},
-                        ce('select',{style:selSt,value:sample.cartonIssue?'Yes':'No',onChange:function(idx){return function(e){updateCqcSampleField(idx,'cartonIssue',e.target.value==='Yes');};}(si)},
-                          ce('option',{value:'No'},'No'),ce('option',{value:'Yes'},'Yes')
-                        )
+                        ce('select',{style:selSt,'data-meta-row':si,'data-meta-col':4,value:sample.cartonIssue?'Yes':'No',
+                          onChange:function(idx){return function(e){updateCqcSampleField(idx,'cartonIssue',e.target.value==='Yes');};}(si),
+                          onKeyDown:function(e){if(e.key==='Enter'&&e.altKey){e.preventDefault();var nr=parseInt(e.target.getAttribute('data-meta-row'))+1;var nc=e.target.getAttribute('data-meta-col');var t=document.querySelector('.cqc-grid [data-meta-row="'+nr+'"][data-meta-col="'+nc+'"]')||document.querySelector('.cqc-grid [data-meta-row="0"][data-meta-col="'+nc+'"]');if(t)t.focus();}}
+                        },ce('option',{value:'No'},'No'),ce('option',{value:'Yes'},'Yes'))
                       ),
                       /* Score */
                       ce('td',{style:tdMeta},
-                        ce('select',{style:selSt,value:sample.score||'',onChange:function(idx){return function(e){updateCqcSampleField(idx,'score',e.target.value);};}(si)},
+                        ce('select',{style:selSt,'data-meta-row':si,'data-meta-col':5,value:sample.score||'',
+                          onChange:function(idx){return function(e){updateCqcSampleField(idx,'score',e.target.value);};}(si),
+                          onKeyDown:function(e){if(e.key==='Enter'&&e.altKey){e.preventDefault();var nr=parseInt(e.target.getAttribute('data-meta-row'))+1;var nc=e.target.getAttribute('data-meta-col');var t=document.querySelector('.cqc-grid [data-meta-row="'+nr+'"][data-meta-col="'+nc+'"]')||document.querySelector('.cqc-grid [data-meta-row="0"][data-meta-col="'+nc+'"]');if(t)t.focus();}}
+                        },
                           ce('option',{value:''},'—'),
-                          ['GREEN','AMBER','RED','PASS','FAIL'].map(function(s){return ce('option',{key:s,value:s},s);})
+                          ['GREEN','AMBER','RED','BLUE','PASS','FAIL'].map(function(s){return ce('option',{key:s,value:s},s);})
                         )
                       ),
                       /* Notes */
                       ce('td',{style:tdMeta},
-                        ce('input',{style:Object.assign({},inSt,{minWidth:140}),value:sample.notes||'',placeholder:'Notes...',onChange:function(idx){return function(e){updateCqcSampleField(idx,'notes',e.target.value);};}(si)})
+                        ce('input',{style:Object.assign({},inSt,{minWidth:140}),'data-meta-row':si,'data-meta-col':6,value:sample.notes||'',placeholder:'Notes...',
+                          onChange:function(idx){return function(e){updateCqcSampleField(idx,'notes',e.target.value);};}(si),
+                          onKeyDown:function(e){if(e.key==='Enter'&&e.altKey){e.preventDefault();var nr=parseInt(e.target.getAttribute('data-meta-row'))+1;var nc=e.target.getAttribute('data-meta-col');var t=document.querySelector('.cqc-grid [data-meta-row="'+nr+'"][data-meta-col="'+nc+'"]')||document.querySelector('.cqc-grid [data-meta-row="0"][data-meta-col="'+nc+'"]');if(t)t.focus();}}
+                        })
                       ),
                       /* Dispute */
                       ce('td',{style:{border:'1px solid var(--border)',padding:'3px 5px',background:sample.disputed?'#fffbe0':'var(--card)',width:80,whiteSpace:'nowrap',verticalAlign:'middle',position:'relative'}},
@@ -11253,11 +11384,12 @@ function ClientQCMgmt(props){
                       );
                     }),
                     ce('td',{style:{padding:'5px 8px',border:'1px solid var(--border)',textAlign:'center',fontFamily:'var(--font-mono)',fontWeight:700,fontSize:12,
-                      color:(cqcSamplesReportTotal/Math.max(cqcSamples.length,1))>10?'var(--red)':(cqcSamplesReportTotal/Math.max(cqcSamples.length,1))>5?'var(--amber)':'var(--green)'}},
-                      cqcSamples.length>0?(cqcSamplesReportTotal/cqcSamples.length).toFixed(2)+'%':'—'
+                      color:cqcAvgTotalDefect>10?'var(--red)':cqcAvgTotalDefect>5?'var(--amber)':'var(--green)'}},
+                      cqcSamples.length>0?cqcAvgTotalDefect.toFixed(2)+'%':'—'
                     ),
                     ce('td',{colSpan:99,style:{border:'1px solid var(--border)'}})
-                  )
+                  ),
+
                 )
               )
               ) /* close body div */
@@ -11449,7 +11581,7 @@ function ClientQCMgmt(props){
                           ce('label',{className:'form-label'},'Client score'),
                           ce('select',{className:'form-select',value:sample.score||'',onChange:function(idx){return function(e){updateCqcSampleField(idx,'score',e.target.value);};}(si)},
                             ce('option',{value:''},'— Select —'),
-                            ['GREEN','AMBER','RED','PASS','FAIL'].map(function(s){return ce('option',{key:s,value:s},s);})
+                            ['GREEN','AMBER','RED','BLUE','PASS','FAIL'].map(function(s){return ce('option',{key:s,value:s},s);})
                           )
                         )
                       );
@@ -11612,24 +11744,48 @@ function ClientQCMgmt(props){
       perms&&perms.createClientQC&&ce('button',{className:'btn btn-primary btn-sm',onClick:function(){setShowNew(true);}},'+ New client report')
     ),
     /* ── Stats bar ── */
-    ce('div',{className:'cqc-stat-grid',style:{marginBottom:16}},
-      ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px'}},
-        ce('div',{style:{fontSize:11,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}},'Reports'),
-        ce('div',{style:{fontSize:22,fontWeight:500,color:'var(--accent)'}},prodReports.length)
-      ),
-      ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px'}},
-        ce('div',{style:{fontSize:11,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}},'Matched'),
-        ce('div',{style:{fontSize:22,fontWeight:500,color:'var(--green)'}},prodReports.filter(function(r){return r.matched;}).length)
-      ),
-      ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px'}},
-        ce('div',{style:{fontSize:11,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}},'Claims'),
-        ce('div',{style:{fontSize:22,fontWeight:500,color:'var(--red)'}},prodReports.filter(function(r){return r.claimedValue>0||r.potentialClaim;}).length)
-      ),
-      ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px'}},
-        ce('div',{style:{fontSize:11,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}},'Avg defect'),
-        ce('div',{style:{fontSize:22,fontWeight:500,color:'var(--amber)'}},prodReports.length?(prodReports.reduce(function(s,r){return s+(r.totalDefect||0);},0)/prodReports.length).toFixed(1)+'%':'—')
-      )
-    ),
+    (function(){
+      var rWithMaj=prodReports.filter(function(r){return r.sectionAvgs&&r.sectionAvgs.Major!=null;});
+      var rWithMin=prodReports.filter(function(r){return r.sectionAvgs&&r.sectionAvgs.Minor!=null;});
+      var kpiMajor=rWithMaj.length>0?Math.round(rWithMaj.reduce(function(s,r){return s+r.sectionAvgs.Major;},0)/rWithMaj.length*100)/100:null;
+      var kpiMinor=rWithMin.length>0?Math.round(rWithMin.reduce(function(s,r){return s+r.sectionAvgs.Minor;},0)/rWithMin.length*100)/100:null;
+      var kpiDef=prodReports.length>0?Math.round(prodReports.reduce(function(s,r){return s+((r.sampleAvgTotal!=null?r.sampleAvgTotal:r.totalDefect)||0);},0)/prodReports.length*10)/10:null;
+      return ce('div',{className:'cqc-stat-grid',style:{marginBottom:16}},
+        /* ── KPI helper ── */
+        (function(){
+          function kpi(label,value,accent,valColor,note){
+            return ce('div',{style:{
+              background:'var(--card)',border:'1px solid var(--border)',
+              borderLeft:'3px solid '+accent,
+              borderRadius:8,padding:'10px 12px',
+              display:'flex',flexDirection:'column',gap:2,
+              position:'relative',overflow:'hidden'
+            }},
+              ce('div',{style:{fontSize:9,fontWeight:600,textTransform:'uppercase',letterSpacing:'.08em',color:'var(--text3)',whiteSpace:'nowrap'}},label),
+              ce('div',{style:{fontSize:20,fontWeight:700,lineHeight:1.1,fontFamily:'var(--font-display)',color:valColor,letterSpacing:'-.02em'}},value),
+              note?ce('div',{style:{fontSize:9,color:'var(--text3)',marginTop:1}},note):null
+            );
+          }
+          var matchedCount=prodReports.filter(function(r){return r.matched;}).length;
+          var claimsCount=prodReports.filter(function(r){return r.claimedValue>0||r.potentialClaim;}).length;
+          var matchPct=prodReports.length>0?Math.round(matchedCount/prodReports.length*100):0;
+          var defAccent=kpiDef==null?'var(--border2)':kpiDef>10?'var(--red)':kpiDef>5?'var(--amber)':'var(--green)';
+          var defColor=kpiDef==null?'var(--text3)':kpiDef>10?'var(--red)':kpiDef>5?'var(--amber)':'var(--green)';
+          var majAccent=kpiMajor==null?'var(--border2)':kpiMajor>5?'#c0392b':'#e07070';
+          var majColor=kpiMajor==null?'var(--text3)':kpiMajor>5?'var(--red)':'#b52828';
+          var minAccent=kpiMinor==null?'var(--border2)':kpiMinor>5?'#ba7517':'#dda830';
+          var minColor=kpiMinor==null?'var(--text3)':kpiMinor>5?'var(--amber)':'#a06010';
+          return [
+            kpi('Reports',prodReports.length,'var(--accent)','var(--accent)',null),
+            kpi('Matched',matchedCount,'#1a7a40','var(--green)',matchedCount>0?matchPct+'% of total':null),
+            kpi('Claims',claimsCount,claimsCount>0?'var(--red)':'var(--border2)',claimsCount>0?'var(--red)':'var(--text3)',null),
+            kpi('Avg defect',kpiDef!=null?kpiDef.toFixed(1)+'%':'—',defAccent,defColor,kpiDef!=null?(kpiDef>10?'Above limit':kpiDef>5?'Borderline':'Within limit'):null),
+            kpi('Avg major',kpiMajor!=null?kpiMajor.toFixed(2)+'%':'—',majAccent,majColor,null),
+            kpi('Avg minor',kpiMinor!=null?kpiMinor.toFixed(2)+'%':'—',minAccent,minColor,null),
+          ];
+        })()
+      );
+    })(),
     prodReports.length===0
       ?ce('div',{style:{background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--r2)',padding:'40px',textAlign:'center',color:'var(--text3)'}},
           ce('div',{style:{fontFamily:'var(--font-display)',fontSize:18,marginBottom:6}},'No '+selProdObj.name+' reports yet'),
@@ -11737,28 +11893,50 @@ function ClientQCMgmt(props){
             ce('div',{style:{overflowX:'auto'}},
             ce('table',{style:{width:'100%',minWidth:820,borderCollapse:'collapse',fontSize:13}},
               ce('thead',null,ce('tr',null,
-                ce('th',{style:{padding:'9px 12px',textAlign:'left',fontSize:11,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',borderBottom:'1px solid var(--border)',background:'var(--bg2)',whiteSpace:'nowrap'}},sortBtn('container','Container')),
-                ce('th',{style:{padding:'9px 12px',textAlign:'left',fontSize:11,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}},sortBtn('client','Client')),
-                ce('th',{className:'cqc-th-hide',style:{padding:'9px 12px',textAlign:'left',fontSize:11,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}},'Variety'),
-                ce('th',{className:'cqc-th-hide',style:{padding:'9px 12px',textAlign:'left',fontSize:11,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',borderBottom:'1px solid var(--border)',background:'var(--bg2)',whiteSpace:'nowrap'}},sortBtn('packDate','Pack date')),
-                ce('th',{style:{padding:'9px 12px',textAlign:'left',fontSize:11,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',borderBottom:'1px solid var(--border)',background:'var(--bg2)',whiteSpace:'nowrap'}},sortBtn('defect','Defect')),
-                ce('th',{style:{padding:'9px 12px',textAlign:'left',fontSize:11,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}},'Score'),
-                ce('th',{style:{padding:'9px 12px',textAlign:'left',fontSize:11,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',borderBottom:'1px solid var(--border)',background:'var(--bg2)'}},'Status')
+                (function(){
+                  /* Shared th helpers */
+                  var thBase={fontSize:10,fontWeight:600,textTransform:'uppercase',letterSpacing:'.08em',background:'var(--bg2)',padding:'10px 12px',whiteSpace:'nowrap',userSelect:'none',textAlign:'center'};
+                  function th(label,opts){
+                    var accent=opts&&opts.accent||null;
+                    var labelColor=opts&&opts.labelColor||'var(--text3)';
+                    var cls=opts&&opts.cls||'';
+                    return ce('th',{
+                      className:cls,
+                      style:Object.assign({},thBase,{
+                        color:labelColor,
+                        borderBottom:accent?'2px solid '+accent:'1px solid var(--border)',
+                        background:opts&&opts.bg||'var(--bg2)',
+                        textAlign:opts&&opts.align||'center',
+                      })
+                    },label);
+                  }
+                  return [
+                    th(sortBtn('container','Container'),{accent:'var(--accent)',align:'left'}),
+                    th(sortBtn('client','Client'),{}),
+                    th('Variety',{cls:'cqc-th-hide'}),
+                    th(sortBtn('packDate','Pack date'),{cls:'cqc-th-hide'}),
+                    th(sortBtn('defect','Defect'),{accent:'var(--amber)',labelColor:'var(--text2)'}),
+                    th('Major',{cls:'cqc-th-hide',accent:'#c0392b',labelColor:'#8a2020',bg:'#fdf8f8'}),
+                    th('Minor',{cls:'cqc-th-hide',accent:'#ba7517',labelColor:'#7a4a10',bg:'#fefcf4'}),
+                    th('Score',{}),
+                    th('Status',{}),
+                  ];
+                })()
               )),
               ce('tbody',null,
                 sortedFiltered.length===0
-                  ?ce('tr',null,ce('td',{colSpan:7,style:{padding:'32px',textAlign:'center',color:'var(--text3)',fontSize:13}},'No reports match the current filters.'))
+                  ?ce('tr',null,ce('td',{colSpan:9,style:{padding:'32px',textAlign:'center',color:'var(--text3)',fontSize:13}},'No reports match the current filters.'))
                   :sortedFiltered.map(function(r,i){
                     var isSelected=selRep===r.id;
                     return ce('tr',{key:r.id||i,
                       style:{borderBottom:'0.5px solid var(--border)',background:isSelected?'var(--bg2)':'var(--card)',cursor:'pointer'},
                       onClick:function(){setSelRep(isSelected?null:r.id);}
                     },
-                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle'}},
+                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle',textAlign:'left'}},
                         ce('div',{style:{fontWeight:500,fontSize:13,fontFamily:'var(--font-mono)'}},r.container||'—'),
                         ce('div',{style:{fontSize:11,color:'var(--text3)',marginTop:1}},r.qcReportNumber||'—')
                       ),
-                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle'}},
+                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle',textAlign:'center'}},
                         ce('div',{style:{display:'flex',alignItems:'center',gap:7}},
                           ce('div',{style:{width:26,height:26,borderRadius:'50%',background:'var(--bg2)',border:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:500,flexShrink:0,color:'var(--text2)'}},(r.client||'?').slice(0,2).toUpperCase()),
                           ce('span',{style:{fontSize:13}},r.client||'—')
@@ -11766,16 +11944,26 @@ function ClientQCMgmt(props){
                       ),
                       ce('td',{className:'cqc-td-hide',style:{padding:'10px 12px',verticalAlign:'middle'}},varietyBadge(r)),
                       ce('td',{className:'cqc-td-hide',style:{padding:'10px 12px',verticalAlign:'middle',fontSize:12,color:'var(--text3)',whiteSpace:'nowrap'}},r.packDate||'—'),
-                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle',minWidth:120}},
-                        r.totalDefect||r.totalDefect===0?defectBar(r.totalDefect):ce('span',{style:{color:'var(--text3)',fontSize:12}},'—')
+                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle',minWidth:120,textAlign:'center'}},
+                        (function(){var d=r.sampleAvgTotal!=null?r.sampleAvgTotal:r.totalDefect;return d!=null?defectBar(d):ce('span',{style:{color:'var(--text3)',fontSize:12}},'—');})()
                       ),
-                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle'}},
+                      ce('td',{className:'cqc-td-hide',style:{padding:'10px 12px',verticalAlign:'middle',textAlign:'center',whiteSpace:'nowrap'}},
+                        r.sectionAvgs&&r.sectionAvgs.Major!=null
+                          ?ce('span',{style:{fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600,color:r.sectionAvgs.Major>5?'var(--red)':'#b52828'}},r.sectionAvgs.Major.toFixed(2)+'%')
+                          :ce('span',{style:{color:'var(--text3)',fontSize:12}},'—')
+                      ),
+                      ce('td',{className:'cqc-td-hide',style:{padding:'10px 12px',verticalAlign:'middle',textAlign:'center',whiteSpace:'nowrap'}},
+                        r.sectionAvgs&&r.sectionAvgs.Minor!=null
+                          ?ce('span',{style:{fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600,color:r.sectionAvgs.Minor>5?'var(--amber)':'#8a6010'}},r.sectionAvgs.Minor.toFixed(2)+'%')
+                          :ce('span',{style:{color:'var(--text3)',fontSize:12}},'—')
+                      ),
+                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle',textAlign:'center'}},
                         r.score?ce('span',{style:{display:'inline-block',padding:'3px 8px',borderRadius:12,fontSize:11,fontWeight:500,
                           background:r.score==='GREEN'?'var(--green-bg)':r.score==='RED'?'#fff0f0':'var(--amber-bg)',
                           color:r.score==='GREEN'?'var(--green)':r.score==='RED'?'var(--red)':'var(--amber)'}},r.score)
                           :ce('span',{style:{color:'var(--text3)',fontSize:12}},'—')
                       ),
-                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle'}},statusCell(r))
+                      ce('td',{style:{padding:'10px 12px',verticalAlign:'middle',textAlign:'center'}},statusCell(r))
                     );
                   })
               )
@@ -11811,7 +11999,7 @@ function ClientQCMgmt(props){
                     ce('span',{style:{color:'var(--text3)'}},r.packDate||'—')
                   ),
                   ce('div',{style:{borderTop:'0.5px solid var(--border)',paddingTop:8}},
-                    ce('div',{style:{marginBottom:6}},r.totalDefect||r.totalDefect===0?defectBar(r.totalDefect):ce('span',{style:{color:'var(--text3)',fontSize:12}},'—')),
+                    ce('div',{style:{marginBottom:6}},(function(){var d=r.sampleAvgTotal!=null?r.sampleAvgTotal:r.totalDefect;return d!=null?defectBar(d):ce('span',{style:{color:'var(--text3)',fontSize:12}},'—');})()),
                     statusCell(r)
                   )
                 );
@@ -11840,15 +12028,16 @@ function ClientQCMgmt(props){
                 )
               ),
               (function(){
-                var hasTD=(r.totalDefect||r.totalDefect===0);
-                var tdCol=r.totalDefect>10?'var(--red)':r.totalDefect>5?'var(--amber)':'var(--green)';
-                var pos=hasTD?Math.min(r.totalDefect/20*100,100):0;
+                var dispTD=r.sampleAvgTotal!=null?r.sampleAvgTotal:r.totalDefect;
+                var hasTD=(dispTD!=null);
+                var tdCol=hasTD?(dispTD>10?'var(--red)':dispTD>5?'var(--amber)':'var(--green)'):'var(--text3)';
+                var pos=hasTD?Math.min(dispTD/20*100,100):0;
                 return ce('div',{style:{display:'flex',gap:16,marginBottom:16,flexWrap:'wrap',alignItems:'stretch'}},
                   ce('div',{style:{flex:'2 1 260px',background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--r2)',padding:'14px 16px'}},
                     ce('div',{style:{fontSize:11,letterSpacing:'.08em',textTransform:'uppercase',color:'var(--text3)',fontWeight:600,marginBottom:4}},'Total defect'),
                     ce('div',{style:{display:'flex',alignItems:'baseline',gap:10,flexWrap:'wrap'}},
-                      ce('div',{style:{fontSize:38,fontWeight:600,lineHeight:1,color:tdCol,fontFamily:'var(--font-display)'}},hasTD?r.totalDefect.toFixed(1)+'%':'—'),
-                      (hasTD&&r.totalDefect>10)?ce('span',{style:{fontSize:11,fontWeight:600,color:'var(--red)',background:'#fff0f0',padding:'2px 8px',borderRadius:6}},'Above 10% limit'):null
+                      ce('div',{style:{fontSize:38,fontWeight:600,lineHeight:1,color:tdCol,fontFamily:'var(--font-display)'}},hasTD?dispTD.toFixed(1)+'%':'—'),
+                      (hasTD&&dispTD>10)?ce('span',{style:{fontSize:11,fontWeight:600,color:'var(--red)',background:'#fff0f0',padding:'2px 8px',borderRadius:6}},'Above 10% limit'):null
                     ),
                     hasTD?ce('div',{style:{marginTop:12,position:'relative',height:8,borderRadius:5,background:'linear-gradient(90deg,#3d9e6b 0%,#3d9e6b 40%,#e0a127 40%,#e0a127 62%,#c0432e 62%,#c0432e 100%)'}},
                       ce('div',{style:{position:'absolute',left:pos+'%',top:-4,width:3,height:16,background:'var(--text)',borderRadius:2,boxShadow:'0 0 0 2px var(--card)'}})
@@ -11896,7 +12085,7 @@ function ClientQCMgmt(props){
               r.defects&&Object.keys(r.defects).filter(function(k){return r.defects[k]>0;}).length>0&&ce('div',{style:{background:'var(--card)',border:'1px solid var(--border)',borderRadius:'var(--r2)',padding:'12px 14px',marginBottom:14}},
                 ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}},
                   ce('span',{style:{fontSize:11,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em'}},'Defect breakdown'),
-                  r.totalDefect||r.totalDefect===0?ce('span',{style:{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:500,color:r.totalDefect>10?'var(--red)':r.totalDefect>5?'var(--amber)':'var(--green)'}},r.totalDefect.toFixed(1)+'% client reported'):null
+                  (function(){var d=r.sampleAvgTotal!=null?r.sampleAvgTotal:r.totalDefect;return d!=null?ce('span',{style:{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:500,color:d>10?'var(--red)':d>5?'var(--amber)':'var(--green)'}},d.toFixed(1)+'%'):null;})()
                 ),
                 ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:6}},
                   Object.keys(r.defects).filter(function(k){return r.defects[k]>0;}).map(function(k){
@@ -12034,7 +12223,7 @@ function ClientQCMgmt(props){
               ),
               ce('div',{className:'dp-body',style:{paddingTop:0}},
                 ce('div',{className:'cqc-stat-grid',style:{marginBottom:14}},
-                  ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px',textAlign:'center'}},ce('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:3}},'Total defect'),ce('div',{style:{fontSize:18,fontWeight:500,color:r.totalDefect>10?'var(--red)':r.totalDefect>5?'var(--amber)':'var(--green)'}},r.totalDefect||r.totalDefect===0?r.totalDefect.toFixed(1)+'%':'—')),
+                  ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px',textAlign:'center'}},ce('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:3}},'Total defect'),(function(){var d=r.sampleAvgTotal!=null?r.sampleAvgTotal:r.totalDefect;var c=d!=null?(d>10?'var(--red)':d>5?'var(--amber)':'var(--green)'):'var(--text3)';return ce('div',{style:{fontSize:18,fontWeight:500,color:c}},d!=null?d.toFixed(1)+'%':'—');})()),
                   ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px',textAlign:'center'}},ce('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:3}},'Samples'),ce('div',{style:{fontSize:18,fontWeight:500}},(r.sampleRows||[]).length)),
                   ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px',textAlign:'center'}},ce('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:3}},'Major'),ce('div',{style:{fontSize:18,fontWeight:500,color:'var(--red)'}},r.sectionAvgs&&r.sectionAvgs.Major!=null?r.sectionAvgs.Major.toFixed(2)+'%':'—')),
                   ce('div',{style:{background:'var(--bg2)',borderRadius:'var(--r1)',padding:'10px 14px',textAlign:'center'}},ce('div',{style:{fontSize:11,color:'var(--text3)',marginBottom:3}},'Minor'),ce('div',{style:{fontSize:18,fontWeight:500,color:'var(--amber)'}},r.sectionAvgs&&r.sectionAvgs.Minor!=null?r.sectionAvgs.Minor.toFixed(2)+'%':'—'))
@@ -12056,7 +12245,7 @@ function ClientQCMgmt(props){
                   )
                 ),
                 r.defects&&Object.keys(r.defects).filter(function(k){return r.defects[k]>0;}).length>0&&ce('div',{style:{marginTop:14}},
-                  ce('div',{style:{fontSize:10,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}},'Defect breakdown — ',ce('span',{style:{color:r.totalDefect>10?'var(--red)':r.totalDefect>5?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}},r.totalDefect?r.totalDefect.toFixed(1)+'%':'')),
+                  ce('div',{style:{fontSize:10,fontWeight:500,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}},'Defect breakdown — ',(function(){var d=r.sampleAvgTotal!=null?r.sampleAvgTotal:r.totalDefect;return ce('span',{style:{color:d!=null&&d>10?'var(--red)':d!=null&&d>5?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)'}},d!=null?d.toFixed(1)+'%':'');})()),
                   ce('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}},
                     Object.keys(r.defects).filter(function(k){return r.defects[k]>0;}).map(function(k){
                       var v=r.defects[k];
@@ -14179,16 +14368,6 @@ function App(){
           var newPalletObjs=[];
           var seenNew={};
           var palletPrefixForEdit=(newBatch&&newBatch.palletPrefix)||'';
-          /* Build set of all pallet numbers currently in the UI —
-             used to detect renamed/removed pallets and delete them from DB */
-          var uiPalletNums={};
-          palletsData.forEach(function(p){
-            var lblU=(p.palletLabel||'').trim();
-            var numU;
-            if(isCropGrapesEdit){numU=lblU?(palletPrefixForEdit&&!lblU.startsWith(palletPrefixForEdit)?palletPrefixForEdit+lblU:lblU):String(p.palletNo);}
-            else{numU=p.palletNo;}
-            uiPalletNums[String(numU)]=true;
-          });
           newSampleRows.forEach(function(item){
             var p=item.pallet;
             if(typeof p.palletId==='number'&&!seenNew[p.palletNo]){
@@ -14212,19 +14391,7 @@ function App(){
               newPalletObjs.push({pallet:p,row:pr2});
             }
           });
-          /* Delete orphaned pallets from DB — pallets that existed before but are
-             no longer in the UI (renamed or removed). Runs before upsert so pallet
-             count stays accurate and renamed pallets don't leave ghost rows. */
-          var orphanDeletePromise=supabase.from('pallets').select('id,pallet_number').eq('inspection_id',realId)
-            .then(function(pr){
-              if(pr.error||!pr.data||pr.data.length===0) return Promise.resolve();
-              var orphanIds=pr.data.filter(function(r){return !uiPalletNums[r.pallet_number];}).map(function(r){return r.id;});
-              if(orphanIds.length===0) return Promise.resolve();
-              console.log('[DalOS] Deleting',orphanIds.length,'orphaned pallet(s) (renamed/removed):',orphanIds);
-              return supabase.from('pallets').delete().in('id',orphanIds);
-            });
-          var insertNewPalletsPromise=orphanDeletePromise.then(function(){
-            return newPalletObjs.length>0
+          var insertNewPalletsPromise=newPalletObjs.length>0
             ?supabase.from('pallets').upsert(newPalletObjs.map(function(x){return x.row;}),{onConflict:'inspection_id,pallet_number'}).select()
                 .then(function(r){
                   if(r.error){
@@ -14238,7 +14405,6 @@ function App(){
                   return r.data;
                 })
             :Promise.resolve([]);
-          });
           /* Fix 1: assign to newRowsChainPromise and return at every step so the
              chain propagates all the way to Promise.all — onDone now waits for
              pallets + sample rows + defects before closing the form */
@@ -14556,34 +14722,7 @@ function App(){
   var liveCurrentUser=currentUser?(function(){var found=users.find(function(u){return u.id===currentUser.id;});return found?Object.assign({},found,{packhouses:currentUser.packhouses}):currentUser;}()):null;
 
   /* Show loading spinner while checking auth session */
-  if(!authChecked) return ce('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',flexDirection:'column',gap:18}},
-    ce('svg',{width:90,height:104,viewBox:'0 0 90 104'},
-      ce('defs',null,
-        ce('radialGradient',{id:'gg1',cx:'35%',cy:'30%'},ce('stop',{offset:'0%',stopColor:'#c084e8'}),ce('stop',{offset:'100%',stopColor:'#7a3a9a'})),
-        ce('radialGradient',{id:'gg2',cx:'35%',cy:'30%'},ce('stop',{offset:'0%',stopColor:'#b06cd4'}),ce('stop',{offset:'100%',stopColor:'#6b2f88'})),
-        ce('radialGradient',{id:'gg3',cx:'35%',cy:'30%'},ce('stop',{offset:'0%',stopColor:'#9a56be'}),ce('stop',{offset:'100%',stopColor:'#5a2576'})),
-        ce('radialGradient',{id:'gg4',cx:'35%',cy:'30%'},ce('stop',{offset:'0%',stopColor:'#8844ac'}),ce('stop',{offset:'100%',stopColor:'#4a1b64'}))
-      ),
-      ce('path',{d:'M45 6 C45 1 50 -1 52 0',fill:'none',stroke:'#5a3a1a',strokeWidth:2.5,strokeLinecap:'round'}),
-      ce('path',{d:'M45 6 C41 2 37 3 36 6',fill:'none',stroke:'#7a5a2a',strokeWidth:1.5,strokeLinecap:'round',opacity:.7}),
-      ce('path',{d:'M45 6 C47 10 45 14 45 18',fill:'none',stroke:'#5a3a1a',strokeWidth:2,strokeLinecap:'round'}),
-      ce('path',{d:'M45 12 C34 6 26 10 28 18 C30 24 42 22 45 14Z',fill:'#2b5c3f',opacity:.85}),
-      ce('path',{d:'M45 12 C56 6 64 10 62 18 C60 24 48 22 45 14Z',fill:'#3a7a4a',opacity:.65}),
-      ce('circle',{cx:30,cy:34,r:11,fill:'url(#gg1)',style:{animation:'gp0 1.15s ease-in-out infinite',transformOrigin:'30px 34px'}}),
-      ce('circle',{cx:53,cy:34,r:11,fill:'url(#gg1)',style:{animation:'gp1 1.15s ease-in-out .14s infinite',transformOrigin:'53px 34px'}}),
-      ce('circle',{cx:26,cy:30,r:3.5,fill:'white',opacity:.22}),ce('circle',{cx:49,cy:30,r:3.5,fill:'white',opacity:.22}),
-      ce('circle',{cx:19,cy:54,r:11,fill:'url(#gg2)',style:{animation:'gp2 1.15s ease-in-out .28s infinite',transformOrigin:'19px 54px'}}),
-      ce('circle',{cx:45,cy:54,r:11,fill:'url(#gg2)',style:{animation:'gp3 1.15s ease-in-out .42s infinite',transformOrigin:'45px 54px'}}),
-      ce('circle',{cx:71,cy:54,r:11,fill:'url(#gg2)',style:{animation:'gp4 1.15s ease-in-out .56s infinite',transformOrigin:'71px 54px'}}),
-      ce('circle',{cx:15,cy:50,r:3.5,fill:'white',opacity:.2}),ce('circle',{cx:41,cy:50,r:3.5,fill:'white',opacity:.2}),ce('circle',{cx:67,cy:50,r:3.5,fill:'white',opacity:.2}),
-      ce('circle',{cx:30,cy:74,r:11,fill:'url(#gg3)',style:{animation:'gp5 1.15s ease-in-out .7s infinite',transformOrigin:'30px 74px'}}),
-      ce('circle',{cx:60,cy:74,r:11,fill:'url(#gg3)',style:{animation:'gp5 1.15s ease-in-out .84s infinite',transformOrigin:'60px 74px'}}),
-      ce('circle',{cx:26,cy:70,r:3.5,fill:'white',opacity:.18}),ce('circle',{cx:56,cy:70,r:3.5,fill:'white',opacity:.18}),
-      ce('circle',{cx:45,cy:93,r:11,fill:'url(#gg4)',style:{animation:'gp6 1.15s ease-in-out .98s infinite',transformOrigin:'45px 93px'}}),
-      ce('circle',{cx:41,cy:89,r:3.5,fill:'white',opacity:.15})
-    ),
-    ce('div',{style:{fontSize:13,fontWeight:500,color:'#7a3a9a',letterSpacing:'.6px'}},"Loading",ce('span',{className:'grape-dots'}))
-  );
+  if(!authChecked) return ce(DalosBackdrop,{key:'dalos-backdrop'});
 
   if(!liveCurrentUser) return ce(React.Fragment,null,ce(DalosBackdrop,{key:'dalos-backdrop'}),ce(LoginScreen,{users:users,forceRecovery:showPasswordRecovery,forceInvite:showInvite,onRecoveryDone:function(){setShowPasswordRecovery(false);},onInviteDone:function(){setShowInvite(false);},onLogin:function(u){
     setCurrentUser(u);
