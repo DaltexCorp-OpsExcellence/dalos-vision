@@ -798,6 +798,21 @@ function InspectionForm(props){
     var rd=props.recoveryDraft;
     if(!rd||!isEdit) return; /* only needed for edit-mode recovery */
     /* Apply draft header overrides — snapshot values replace DB-loaded batch values */
+    /* FIX (draft-restore): these header fields were previously OMITTED here, so on
+       edit-mode recovery they silently reverted to the DB (batch) value instead of the
+       draft's edited value — most visibly LOT came back as the old DB lot. Restore them
+       from the snapshot too. Raw setters (no setIsDirty side-effect) to match the rest. */
+    if(rd.lot!==undefined) setLotRaw(rd.lot);
+    if(rd.date!==undefined) setDateRaw(rd.date);
+    if(rd.additionalFarms!==undefined) setAdditionalFarms(rd.additionalFarms);
+    if(rd.farm3!==undefined) setFarm3(rd.farm3);
+    if(rd.farm4!==undefined) setFarm4(rd.farm4);
+    if(rd.plot3!==undefined) setPlot3(rd.plot3);
+    if(rd.plot4!==undefined) setPlot4(rd.plot4);
+    if(rd.cartonCompany2!==undefined) setCartonCompany2(rd.cartonCompany2);
+    if(rd.importer!==undefined) setImporter(rd.importer);
+    if(rd.importerAddr!==undefined) setImporterAddr(rd.importerAddr);
+    if(rd.stickerImg!==undefined) setStickerImg(rd.stickerImg);
     if(rd.variety!==undefined) setVariety(rd.variety);
     if(rd.variety2!==undefined) setVariety2(rd.variety2);
     if(rd.varietyType) setVarietyType(rd.varietyType);
@@ -850,7 +865,7 @@ function InspectionForm(props){
           importer:importer,importerAddr:importerAddr,stickerImg:stickerImg,
           extraLabels:extraLabels,hdrLocked:hdrLocked,stickerChecks:stickerChecks,
           cartonType:cartonType,cartonCompany2:cartonCompany2,
-          grpSessionId:(cropId==='grapes'?grpSessionId:null),
+          grpSessionId:grpSessionId||null,
           ts:Date.now()};
         localStorage.setItem(draftKey,JSON.stringify(snap));
       }catch(e){}
@@ -863,7 +878,7 @@ function InspectionForm(props){
             user_id:uid,
             packhouse_id:packhouse.id||'',
             product_id:cropId||'grapes',
-            inspection_id:(cropId==='grapes'&&grpSessionId)||null,
+            inspection_id:grpSessionId||null,
             snapshot:snap,
             last_autosaved_at:new Date().toISOString()
           },{onConflict:'id'}).then(function(r){
@@ -883,6 +898,21 @@ function InspectionForm(props){
     },30000);
     return function(){clearInterval(timer);};
   },[isDirty,lot,date,variety,client,country,farm,container,pallets,decision,grpSessionId,stickerChecks,extraLabels]);
+  /* MOVED UP (was defined ~140 lines below): compute restoredDraft BEFORE _d so that
+     _d — and every useState() default that reads _d — actually sees the recovered
+     draft. Previously restoredDraft was declared later, so at this point it was
+     undefined (var-hoisted), _d became {}, and fields like LOT restored blank. */
+  var restoredDraft=(function(){
+    if(props.recoveryDraft) return props.recoveryDraft;
+    if(isEdit) return null;
+    try{
+      var raw=localStorage.getItem(draftKey);
+      if(!raw) return null;
+      var d=JSON.parse(raw);
+      if(!d.ts||Date.now()-d.ts>86400000){localStorage.removeItem(draftKey);return null;}
+      return d;
+    }catch(e){return null;}
+  })();
   var _d=restoredDraft||{};
   var sf=useState(batch?batch.date:(_d.date||new Date().toISOString().slice(0,10))); var date=sf[0]; var setDateRaw=sf[1];
   function setDate(v){setDateRaw(v);setIsDirty(true);}
@@ -942,6 +972,23 @@ function InspectionForm(props){
   var sSC=useState(batch&&batch.stickerChecks?batch.stickerChecks:{product:false,variety:false,cls:false,phName:false,phCode:false,farmCode:false,packDate:false,netWt:false,trace:false,ggn:false,lot:false,importer:false,origin:false});
   var stickerChecks=sSC[0]; var setStickerChecks=sSC[1];
   function toggleCheck(k){var n=Object.assign({},stickerChecks);n[k]=!n[k];setStickerChecks(n);}
+  /* Lazy-load this inspection's label-sticker checklist on edit-open. Sticker checks are no
+     longer bulk-loaded with the list (that was an 8-page fetch); we pull just this one
+     inspection's rows here — a single uncapped .eq query, fast even on a weak connection.
+     Skipped for new inspections and when a recovery draft is present (the draft's checklist
+     takes priority and is applied by the recovery effect above). */
+  React.useEffect(function(){
+    if(!isEdit||!batch||!batch.id||props.recoveryDraft) return;
+    supabase.from('inspection_sticker_checks').select('field_key,confirmed').eq('inspection_id',batch.id)
+      .then(function(r){
+        if(r.error||!r.data||!r.data.length) return;
+        setStickerChecks(function(prev){
+          var sc=Object.assign({},prev);
+          r.data.forEach(function(c){sc[c.field_key]=c.confirmed;});
+          return sc;
+        });
+      });
+  },[]);
   var totalChecks=Object.keys(stickerChecks).length;
   var doneChecks=Object.values(stickerChecks).filter(Boolean).length;
 
@@ -1001,6 +1048,7 @@ function InspectionForm(props){
     setPreFilled(true);
   }
   var sNP=useState(false); var showNP=sNP[0]; var setShowNP=sNP[1];
+  var sNPWarn=useState(false); var npWarn=sNPWarn[0]; var setNPWarn=sNPWarn[1];
   var thresholds=(config.defectThresholds||{})[cropId]||INITIAL_CONFIG.defectThresholds.citrus||{};
   var defSections=(function(){
     var ds=config.defectSections;
@@ -1018,19 +1066,7 @@ function InspectionForm(props){
 
   /* pallets: [{palletId, palletNo, rows:[{id,palletNo,time,size,cartonWt,brix,defects,notes}]}] */
   /* ── Draft restore — recover unsaved data after crash or failed save ── */
-  var restoredDraft=(function(){
-    /* Priority 1: Explicit recovery via banner — works for BOTH new and edit mode.
-       For edit mode, additional fields are applied via a mount useEffect below. */
-    if(props.recoveryDraft) return props.recoveryDraft;
-    if(isEdit) return null; /* edit mode without explicit recovery: DB is source of truth */
-    try{
-      var raw=localStorage.getItem(draftKey);
-      if(!raw) return null;
-      var d=JSON.parse(raw);
-      if(!d.ts||Date.now()-d.ts>86400000){localStorage.removeItem(draftKey);return null;}
-      return d;
-    }catch(e){return null;}
-  })();
+  /* (restoredDraft is computed earlier, just above _d) */
   /* initPallets: recoveryDraft takes priority over batch in edit mode when explicitly restoring */
   var initPallets=(props.recoveryDraft&&restoredDraft&&restoredDraft.pallets&&restoredDraft.pallets.length>0)
     ?restoredDraft.pallets
@@ -1090,8 +1126,8 @@ function InspectionForm(props){
   /* Grapes session ID — stable for lifetime of this form instance */
   var sGrpSession=useState(null);
   var grpSessionId=(function(){
+    if(sGrpSession[0]) return sGrpSession[0]; /* locked session id — all crops */
     if(cropId!=='grapes') return '';
-    if(sGrpSession[0]) return sGrpSession[0];
     if(batch&&batch.id) return batch.id;
     var prod=(config.products||[]).find(function(p){return p.id==='grapes';})||{inspection_prefix:'GR'};
     var prefix=prod.inspection_prefix||'GR';
@@ -1135,12 +1171,13 @@ function InspectionForm(props){
                 };
               });
               var isGrapes=(props.cropId||cropId||'').toLowerCase()==='grapes';
+              var isMangoLd=(props.cropId||cropId||'').toLowerCase()==='mango';
               return {
                 palletId:pal.id,
                 palletNo:pal.pallet_number,
-                palletLabel:isGrapes?(pal.pallet_number||''):'',
-                palletContainer:isGrapes?(pal.container_number||''):'',
-                palletTraceCodes:isGrapes?(pal.trace_codes||[]):[],
+                palletLabel:(isGrapes||isMangoLd)?(pal.pallet_number||''):'',
+                palletContainer:(isGrapes||isMangoLd)?(pal.container_number||''):'',
+                palletTraceCodes:(isGrapes||isMangoLd)?(pal.trace_codes||[]):[],
                 palletCartonCompany:pal.carton_company||'',
                 actualTraceCode:pal.actual_trace_code||'',
                 showActualTrace:false,
@@ -1227,15 +1264,42 @@ function InspectionForm(props){
     }
     if(!variety.trim()) errs.push('Variety');
     if(!decision) errs.push('Decision \u2014 Accept or Reject must be selected');
+    /* ── DUPLICATE PALLET LABEL BLOCK (session-scoped, all products) ──────────
+       Two pallets with the same number get merged by the (inspection_id,
+       pallet_number) de-dup, silently dropping one pallet's samples. Hard-block
+       the save until labels are unique. Only considers pallets that actually
+       have a label (blank-label handling stays with the grapes label rule). */
+    var _palletPfx=(packhouse&&packhouse.pallet_prefix)||'';
+    var _seen={}, _dupLabels=[], _dupFirstIdx=-1;
+    pallets.forEach(function(p,idx){
+      var raw=(p.palletLabel||'').trim();
+      if(!raw) return;
+      var composed=(_palletPfx&&!raw.startsWith(_palletPfx))?_palletPfx+raw:raw;
+      if(_seen[composed]!==undefined){
+        if(_dupLabels.indexOf(composed)<0) _dupLabels.push(composed);
+        if(_dupFirstIdx<0) _dupFirstIdx=idx;
+      } else {
+        _seen[composed]=idx;
+      }
+    });
+    if(_dupLabels.length>0){
+      errs.push('Duplicate pallet number'+(_dupLabels.length>1?'s':'')+': '+_dupLabels.join(', ')+' \u2014 give each pallet its own number');
+      window.__dupFirstIdx=_dupFirstIdx;
+    } else { window.__dupFirstIdx=-1; }
     setValidErrs(errs);
     if(errs.length>0){
       /* Scroll to first invalid field + flash red ring */
       try {
         var fieldKeyMap={'LOT No':'lot','Variety':'variety','Decision \u2014 Accept or Reject must be selected':'decision','Pallet label required for all pallets (e.g. P-4471)':'__pallet__','All trace codes must be assigned V1, V2 or Both in a mixed variety session':'traceCodes'};
-        var firstKey=fieldKeyMap[errs[0]]||'';
+        var isDupErr=errs[0].indexOf('Duplicate pallet number')===0;
+        var firstKey=isDupErr?'__dup__':(fieldKeyMap[errs[0]]||'');
         if(firstKey){
           var el=null;
-          if(firstKey==='__pallet__'){
+          if(firstKey==='__dup__'){
+            /* Scroll to the first colliding pallet label */
+            var di=(typeof window.__dupFirstIdx==='number')?window.__dupFirstIdx:-1;
+            if(di>=0) el=document.querySelector('[data-field="palletLabel-'+di+'"]');
+          } else if(firstKey==='__pallet__'){
             /* Scroll to the first pallet with an empty label specifically */
             var emptyIdx=pallets.findIndex(function(p){return !(p.palletLabel||'').trim();});
             if(emptyIdx>=0) el=document.querySelector('[data-field="palletLabel-'+emptyIdx+'"]');
@@ -1259,7 +1323,7 @@ function InspectionForm(props){
     var defectAvgs={};
     defSectionsForSave.forEach(function(sec){sec.items.forEach(function(d){defectAvgs[d.key]=avgDefect(d.key);});});
     var newBatch={
-      id:batch?batch.id:(cropId==='grapes'?grpSessionId:(function(){var prod=(config.products||[]).find(function(p){return p.id===cropId;})||{prefix:'CT'};return (prod.inspection_prefix||prod.prefix||'CT')+'-'+new Date().getFullYear()+'-'+String(Math.floor(1000+Math.random()*8999)).padStart(4,'0');}())),
+      id:batch?batch.id:(grpSessionId?grpSessionId:cropId==='grapes'?null:(function(){var prod=(config.products||[]).find(function(p){return p.id===cropId;})||{prefix:'CT'};return (prod.inspection_prefix||prod.prefix||'CT')+'-'+new Date().getFullYear()+'-'+String(Math.floor(1000+Math.random()*8999)).padStart(4,'0');}())),
       loadedVersion:loadedVersionRef.current||null,
       date:date,lot:lot,container:container,variety:variety,variety2:variety2,varietyType:varietyType,category:category,category2:category2,cls:cls,
       season:config.activeSeason||'2025/26',
@@ -1293,7 +1357,7 @@ function InspectionForm(props){
     };
     /* For new grapes inspections: switch to pending confirmation screen immediately
        so the user sees progress and can't navigate away mid-save. */
-    if(!isEdit&&cropId==='grapes') setSavePending(true);
+    if(!isEdit) setSavePending(true);
     setIsSaving(true);
     setSaveStatus('saving');
     setSaveErrMsg('');
@@ -1324,24 +1388,46 @@ function InspectionForm(props){
     },15000);
     var saveCallback=function(err, realId){
       if(saveWatchdogRef.current){clearTimeout(saveWatchdogRef.current);saveWatchdogRef.current=null;}
+      /* Recoverable integrity abort: return straight to the FILLED form (not the
+         failure screen) with an inline banner so the inspector just taps Save
+         again. Form state + autosave draft are intact — no data loss. */
+      if(typeof err==='string'&&err.indexOf('RETRY:')===0){
+        setSavePending(false);
+        setSaveFailed(null);
+        setSaveStatus('error');
+        setSaveErrMsg(err.slice(6));
+        setIsSaving(false);
+        return;
+      }
       if(err==='CONFLICT'){
         /* Optimistic lock conflict — another device saved this session first.
-           Refresh the listing cache so when user reopens the form they get the
-           latest updated_at and won't hit the conflict again. */
+           AUTO-REFRESH the optimistic-lock version immediately: refetch the
+           current updated_at into loadedVersionRef so the inspector's NEXT save
+           validates against the live version instead of the stale one. Without
+           this, a re-tap re-sends the same stale loaded_version and conflicts
+           again — the runaway CONFLICT loop seen in prod. (Manual Refresh stays.) */
         try { if(typeof refreshBatchesById==='function') refreshBatchesById([realId]); } catch(e){}
-        if(!isEdit&&cropId==='grapes'){
+        var _conflictId=(isEdit&&batch&&batch.id)?batch.id:realId;
+        if(_conflictId){
+          try{
+            supabase.from('inspections').select('updated_at').eq('id',_conflictId).single().then(function(r){
+              if(r&&r.data&&r.data.updated_at){ loadedVersionRef.current=r.data.updated_at; }
+            }).catch(function(){});
+          }catch(e){}
+        }
+        if(!isEdit){
           setSavePending(false);
-          setSaveFailed('This session was saved on another device while you were editing. Go back to the form, click Refresh, then save again.');
+          setSaveFailed('This session was updated on another device. We\u2019ve reloaded the latest version — review your entries, then save again.');
           setIsSaving(false);
           return;
         }
         setSaveStatus('error');
-        setSaveErrMsg('This session was saved on another device while you were editing. Click \u201cRefresh\u201d to load the latest version — your changes have not been saved.');
+        setSaveErrMsg('This session was updated on another device. We\u2019ve reloaded the latest version — review your changes, then tap Save again.');
         setIsSaving(false);
         return;
       }
       if(err){
-        if(!isEdit&&cropId==='grapes'){
+        if(!isEdit){
           setSavePending(false);
           setSaveFailed(typeof err==='string'?err:('Save failed: '+(err.message||'unknown error')));
           setIsSaving(false);
@@ -1362,11 +1448,12 @@ function InspectionForm(props){
       if(!isEdit&&realId){
         setSavePending(false);
         setSavedInspId(realId);
-        if(cropId==='grapes') setSavedLot(realId);
+        setSavedLot(cropId==='grapes'?realId:(newBatch.lot||realId));
       }
       var ts=new Date();
       setSavedAtTime(String(ts.getHours()).padStart(2,'0')+':'+String(ts.getMinutes()).padStart(2,'0'));
       setSaveStatus('saved');
+      setIsDirty(false); /* stop autosave from re-creating the draft after cleanup */
       /* Broadcast to other tabs so their listing refreshes automatically */
       try{
         var bc=new BroadcastChannel('dalos_saves');
@@ -1424,10 +1511,9 @@ function InspectionForm(props){
       }
     };
     if(props.onAddBatch) props.onAddBatch(newBatch, saveCallback);
-    /* Grapes: confirmation is shown from saveCallback once the real sequential ID
-       is confirmed by the server. For other products (Citrus etc.), show immediately
-       using the lot number since the lot is user-entered and known up front. */
-    if(!isEdit && cropId!=='grapes'){setSavedLot(newBatch.lot||newBatch.id||realId||'saved');}
+    /* Confirmation is shown from saveCallback for ALL crops once the server
+       confirms — never before, so a failed save can no longer display
+       "Unit saved". The pending screen covers the in-flight window. */
   }
 
   /* ── PDF Report Generation ── */
@@ -2010,6 +2096,8 @@ function InspectionForm(props){
             onClick:function(){
               if(cropId!=='grapes') prefillFromLot(savedLot);
               if(cropId!=='grapes') setLot(savedLot);
+              if(cropId!=='grapes') sGrpSession[1](null); /* next unit = new inspection */
+              setSaveStatus('idle'); /* clear stale "Saved at" banner from previous unit */
               setDecision('');
               setPallets([newPallet(1,'',container)]);
               setActivePalletIdx(0);
@@ -2080,7 +2168,7 @@ function InspectionForm(props){
         (isEdit||savedLot)&&ce('button',{className:'btn btn-sm',title:'Download internal inspection record PDF',style:{background:'var(--bg2)',border:'1px solid var(--border2)',color:'var(--text2)',fontSize:11,flexShrink:0,display:'inline-flex',alignItems:'center',gap:4},onClick:function(){generatePDF('internal');}},'\u2193 Internal PDF'),
         cropId==='grapes'
         ?ce('button',{className:'btn btn-sm form-topbar-newpallet',style:{background:'#eef4ff',border:'1px solid #a0b8e8',color:'#2a5aa0',fontWeight:500,flexShrink:0,whiteSpace:'nowrap'},onClick:function(){addPalletSameLOT();}},'+ Pallet')
-        :(!isEdit&&ce('button',{className:'btn btn-sm form-topbar-newpallet',style:{background:'#eef4ff',border:'1px solid #a0b8e8',color:'#2a5aa0',fontWeight:500,flexShrink:0,whiteSpace:'nowrap'},onClick:function(){setShowNP(true);}}, 'New pallet')),
+        :ce('button',{className:'btn btn-sm form-topbar-newpallet',style:{background:'#eef4ff',border:'1px solid #a0b8e8',color:'#2a5aa0',fontWeight:500,flexShrink:0,whiteSpace:'nowrap'},onClick:function(){if(isEdit){addPalletSameLOT();}else{setShowNP(true);}}}, isEdit?'+ Pallet':'New pallet'),
         ce('button',{className:'btn btn-primary btn-sm',style:{flexShrink:0,opacity:(isSaving||!isOnline&&!isReconnecting)?.7:1,display:'inline-flex',alignItems:'center',gap:6},
           onClick:function(){
             if(!isOnline||isReconnecting) return; /* offline banner already communicates this — no need for a second amber banner */
@@ -2260,7 +2348,7 @@ function InspectionForm(props){
                 ||livePalletsContainers.indexOf(q)>=0
                 ||(b.client||'').toLowerCase().indexOf(q)>=0;
             });
-            if(others.length===0) return ce('div',{style:{fontSize:12,color:'var(--text3)',textAlign:'center',padding:'20px 0'}},'No other grapes sessions found.');
+            if(others.length===0) return ce('div',{style:{fontSize:12,color:'var(--text3)',textAlign:'center',padding:'20px 0'}},'No other '+cropId+' sessions in this packhouse.');
             return others.map(function(b){
               var livePallets=sessionPallets[b.id]||[];
               /* get container from live pallets or from batch */
@@ -2307,11 +2395,18 @@ function InspectionForm(props){
             ce('div',{style:{fontWeight:600,marginBottom:2}},cropId==='grapes'?('Add pallet '+(pallets.length+1)+' to this session'):('Add pallet '+(pallets.length+1)+' — same LOT'+(lot?' '+lot:''))),
             ce('div',{style:{fontSize:11,opacity:.8,fontWeight:400}},cropId==='grapes'?'Adds another pallet to this session. Header stays the same.':'Adds Pallet '+(pallets.length+1)+' to this form. Header stays locked.')
           ),
-          ce('button',{className:'btn btn-secondary',style:{justifyContent:'flex-start',padding:'14px 16px',flexDirection:'column',alignItems:'flex-start',height:'auto'},onClick:startNewLOT},
+          npWarn
+          ?ce('div',{style:{border:'1.5px solid #e8a0a0',background:'#fdf3f2',borderRadius:10,padding:'14px 16px'}},
+              ce('div',{style:{fontWeight:600,fontSize:13,color:'#a03030',marginBottom:4}},'⚠ This '+(cropId==='grapes'?'session':'unit')+' is NOT saved yet'),
+              ce('div',{style:{fontSize:12,color:'#7a4040',lineHeight:1.5,marginBottom:12}},'Starting a new '+(cropId==='grapes'?'session':'LOT')+' now will permanently discard everything entered in this form.'),
+              ce('button',{className:'btn btn-primary',style:{width:'100%',justifyContent:'center',marginBottom:8},onClick:function(){setNPWarn(false);setShowNP(false);handleSave();}},'Save this '+(cropId==='grapes'?'session':'unit')+' first'),
+              ce('button',{className:'btn btn-secondary',style:{width:'100%',justifyContent:'center',color:'#a03030',borderColor:'#e8a0a0'},onClick:function(){setNPWarn(false);startNewLOT();}},'Discard and start fresh')
+            )
+          :ce('button',{className:'btn btn-secondary',style:{justifyContent:'flex-start',padding:'14px 16px',flexDirection:'column',alignItems:'flex-start',height:'auto'},onClick:function(){if(isDirty){setNPWarn(true);}else{startNewLOT();}}},
             ce('div',{style:{fontWeight:600,marginBottom:2}},cropId==='grapes'?'New session':'New LOT'),
             ce('div',{style:{fontSize:11,color:'var(--text3)',fontWeight:400}},cropId==='grapes'?'Clears everything. Fresh session with a new ID.':'Clears everything. Fresh header.')
           ),
-          ce('button',{className:'btn btn-secondary btn-sm',onClick:function(){setShowNP(false);}},'✕ Cancel')
+          ce('button',{className:'btn btn-secondary btn-sm',onClick:function(){setNPWarn(false);setShowNP(false);}},'✕ Cancel')
         )
       )
     ),
@@ -2359,7 +2454,8 @@ function InspectionForm(props){
                   ce('span',{style:{fontSize:10,color:unitConfirmed.container?'#fff':'var(--amber)',lineHeight:1}},unitConfirmed.container?'\u2713':'\u2713')
                 )
               ),
-              ce('input',{className:'form-input',value:container,onChange:function(e){var newVal=e.target.value;var oldVal=container;setContainer(newVal);if(cropId==='grapes'){setPallets(function(prev){return prev.map(function(p){if(!p.palletContainer||(oldVal&&p.palletContainer.toUpperCase()===oldVal.toUpperCase())){return Object.assign({},p,{palletContainer:newVal});}return p;});});}if(preFilled)confirmUnit('container');},placeholder:'e.g. AMCU 9327595',style:preFilled&&!unitConfirmed.container?{borderColor:'var(--amber)',boxShadow:'0 0 0 2px #e8c87a44'}:{}})
+              ce('input',{className:'form-input',value:container,onChange:function(e){var newVal=e.target.value;var oldVal=container;setContainer(newVal);if(cropId==='grapes'||cropId==='mango'){setPallets(function(prev){return prev.map(function(p){if(!p.palletContainer||(oldVal&&p.palletContainer.toUpperCase()===oldVal.toUpperCase())){return Object.assign({},p,{palletContainer:newVal});}return p;});});}if(preFilled)confirmUnit('container');},placeholder:'e.g. AMCU 9327595',style:preFilled&&!unitConfirmed.container?{borderColor:'var(--amber)',boxShadow:'0 0 0 2px #e8c87a44'}:{}}),
+              cropId==='mango'&&container.trim()&&(function(){var norm=container.trim().replace(/\s+/g,' ').toUpperCase();var dupe=(allBatches||[]).find(function(bb){return bb&&bb.id!==(batch&&batch.id)&&((bb.container||'').trim().replace(/\s+/g,' ').toUpperCase()===norm);});return dupe?ce('div',{style:{marginTop:5,fontSize:11,color:'#b06010',background:'#fff3e0',border:'1px solid #e8c87a',borderRadius:6,padding:'4px 8px'}},'\u26a0 Container already used in session '+dupe.id+(dupe.lot?' (LOT '+dupe.lot+')':'')+' \u2014 one container = one session.'):null;})()
             ),
             ce('div',{className:'form-field'},
               ce('label',{className:'form-label',style:{display:'flex',alignItems:'center',justifyContent:'space-between'}},
@@ -2600,7 +2696,7 @@ function InspectionForm(props){
 ,ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Carton type'),ce('select',{className:'form-select',value:cartonType,onChange:function(e){setCartonType(e.target.value);}},
   [ce('option',{key:'',value:''},'— Select —')].concat((config.cartonTypes||[]).map(function(c){return ce('option',{key:c,value:c},c);})).concat(cartonType&&!(config.cartonTypes||[]).includes(cartonType)?[ce('option',{key:'deact',value:cartonType,style:{color:'var(--text3)'}},cartonType+' (inactive)')]:[])
 )),
-            cropId!=='grapes'&&ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Carton color'),ce('input',{className:'form-input',value:cartonColor,onChange:function(e){setCartonColor(e.target.value);},placeholder:'e.g. Brown, White...'})),
+            cropId==='citrus'&&ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Carton color'),ce('input',{className:'form-input',value:cartonColor,onChange:function(e){setCartonColor(e.target.value);},placeholder:'e.g. Brown, White...'})),
             ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Carton company'),ce('input',{className:'form-input',value:cartonCompany,onChange:function(e){setCartonCompany(e.target.value);},placeholder:'e.g. Smurfit Kappa...'})),
             ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Carton company 2'),ce('input',{className:'form-input',value:cartonCompany2,onChange:function(e){setCartonCompany2(e.target.value);},placeholder:'e.g. DS Smith...'})),
             ce('div',{className:'form-field','data-field':'client'},ce('label',{className:'form-label'},'Client'),
@@ -2734,7 +2830,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
         onClick:addExtraLabel
       },'＋ Add extra label sticker'),
       /* TRACE CODES — grapes only: above pallets for per-pallet assignment */
-      cropId==='grapes'&&ce('div',{className:'card',style:{marginBottom:12},'data-field':'traceCodes'},
+      (cropId==='grapes'||cropId==='mango')&&ce('div',{className:'card',style:{marginBottom:12},'data-field':'traceCodes'},
         ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}},
           ce('div',{className:'section-title',style:{marginBottom:0}},
             ce('div',{className:'section-title-bar',style:{background:'#5a7ab0'}}),
@@ -2823,8 +2919,8 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
           /* Pallet header */
           ce('div',{style:{padding:'10px 16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8,background:isActive?'var(--accent)08':'var(--bg2)',cursor:'pointer'},onClick:function(){setActivePalletIdx(pIdx);}},
             ce('div',{style:{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}},
-              /* Grapes: pallet label input. Others: numbered badge */
-              cropId==='grapes'
+              /* Grapes + Mango: pallet label input. Others: numbered badge */
+              (cropId==='grapes'||cropId==='mango')
               ?ce('div',{style:{display:'flex',flexDirection:'column',gap:3,flexShrink:0},'data-field':'palletLabel-'+pIdx,onClick:function(e){e.stopPropagation();}},
                   ce('div',{style:{fontSize:9,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:2}},'Pallet #'),
                   ce('div',{style:{display:'flex',alignItems:'center',gap:4}},
@@ -2844,15 +2940,15 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
               ce('div',{style:{minWidth:0,overflow:'hidden'}},
                 ce('div',{className:'section-title',style:{marginBottom:0,flexWrap:'nowrap',whiteSpace:'nowrap',overflow:'hidden'}},
                   ce('div',{className:'section-title-bar',style:{background:'#b03030',flexShrink:0}}),
-                  ce('span',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},cropId==='grapes'?('Pallet '+(pallet.palletLabel||('#'+pallet.palletNo))+' sample readings'):('Pallet '+pallet.palletNo+' sample readings')),
+                  ce('span',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},(cropId==='grapes'||cropId==='mango')?('Pallet '+(pallet.palletLabel||('#'+pallet.palletNo))+' sample readings'):('Pallet '+pallet.palletNo+' sample readings')),
                   ce('span',{style:{fontSize:11,color:'var(--text3)',fontWeight:400,textTransform:'none',letterSpacing:0,marginLeft:6,flexShrink:0,whiteSpace:'nowrap'}},pRows.length+' sample'+(pRows.length!==1?'s':''))
                 ),
                 ce('div',{style:{fontSize:11,color:pCrit?'var(--red)':pTotal>5?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)',fontWeight:600,marginTop:2}},'Avg total: '+pTotal.toFixed(2)+'%'+(pCrit?' · ⚠ Critical':''))
               )
             ),
             ce('div',{className:'pallet-header-actions',style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
-              /* Grapes: per-pallet container field + Set button */
-              cropId==='grapes'&&ce('div',{style:{display:'flex',alignItems:'center',gap:6},onClick:function(e){e.stopPropagation();}},
+              /* Grapes + Mango: per-pallet container field + Set button */
+              (cropId==='grapes'||cropId==='mango')&&ce('div',{style:{display:'flex',alignItems:'center',gap:6},onClick:function(e){e.stopPropagation();}},
                 ce('div',{style:{fontSize:9,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',flexShrink:0}},'Container'),
                 ce('input',{className:'form-input',value:pallet.palletContainer||'',
                   onChange:function(i){return function(e){updatePalletContainer(i,e.target.value);};}(pIdx),
@@ -2889,8 +2985,8 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
               ?ce('button',{className:'btn btn-sm',style:{background:'#eef4ff',border:'1px solid #a0b8e8',color:'#2a5aa0',fontWeight:500,flexShrink:0,whiteSpace:'nowrap',display:'inline-flex'},
                   onClick:function(e){e.stopPropagation();addPalletSameLOT();}
                 },'+ Pallet')
-              :(!isEdit&&ce('button',{className:'btn btn-sm',style:{background:'#eef4ff',border:'1px solid #a0b8e8',color:'#2a5aa0',fontWeight:500,flexShrink:0,whiteSpace:'nowrap',display:'inline-flex'},onClick:function(e){e.stopPropagation();setShowNP(true);}},'+ Pallet')),
-              cropId==='grapes'&&ce('button',{className:'btn btn-sm',
+              :ce('button',{className:'btn btn-sm',style:{background:'#eef4ff',border:'1px solid #a0b8e8',color:'#2a5aa0',fontWeight:500,flexShrink:0,whiteSpace:'nowrap',display:'inline-flex'},onClick:function(e){e.stopPropagation();if(isEdit){addPalletSameLOT();}else{setShowNP(true);}}},'+ Pallet'),
+              (cropId==='grapes'||(cropId==='mango'&&pallets.length>1))&&ce('button',{className:'btn btn-sm',
                 style:{background:'var(--bg2)',color:'var(--text2)',border:'1px solid var(--border2)',fontSize:11,flexShrink:0,opacity:animatingPalletId?.5:1,transition:'opacity .2s'},
                 disabled:!!animatingPalletId,
                 onClick:function(i,p){return function(e){e.stopPropagation();openMoveModal(i,p);};}(pIdx,pallet)
@@ -2906,7 +3002,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
             )
           ),
           /* Trace codes row — grapes only, sits between header and sample table */
-          cropId==='grapes'&&ce('div',{style:{padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg)',display:'flex',alignItems:'center',gap:10},onClick:function(e){e.stopPropagation();}},
+          (cropId==='grapes'||cropId==='mango')&&ce('div',{style:{padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg)',display:'flex',alignItems:'center',gap:10},onClick:function(e){e.stopPropagation();}},
             ce('div',{style:{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',flexShrink:0,minWidth:80}},'Trace Codes'),
             ce('div',{style:{display:'flex',flexWrap:'wrap',gap:5,flex:1}},
               (function(){
@@ -2964,7 +3060,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
             )
           ),
           /* Actual Traceability Code — collapsible, star icon, clean UX */
-          cropId==='grapes'&&ce('div',{style:{margin:'4px 0 6px',borderRadius:6,border:'1px solid '+(pallet.actualTraceCode?'var(--accent)':'var(--border2)'),overflow:'hidden'}},
+          (cropId==='grapes'||cropId==='mango')&&ce('div',{style:{margin:'4px 0 6px',borderRadius:6,border:'1px solid '+(pallet.actualTraceCode?'var(--accent)':'var(--border2)'),overflow:'hidden'}},
             ce('div',{
               style:{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',cursor:'pointer',background:pallet.showActualTrace?(pallet.actualTraceCode?'var(--green-bg)':'var(--bg2)'):'transparent',userSelect:'none'},
               onClick:function(pidx,cur){return function(){updatePalletField(pidx,'showActualTrace',!cur);};}(pIdx,pallet.showActualTrace)
@@ -3498,39 +3594,81 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
             /* ── CITRUS (default) sample table ── */
             :(function(){
               var secCols=defSections.length?defSections.map(function(){return '72px';}).join(' '):'72px';
-              var gridTpl='90px 100px 70px 60px 60px 60px '+secCols+' 1fr 54px 22px 22px';
-              var hdrLabels=['Time','Op. Date','Sample #','Size','Wt (kg)','Brix'].concat(defSections.map(function(s){return (s.section||s.name||'Defect').split(' ')[0];})).concat(['Notes','P/F','▼','']);
+              var isMangoTbl=cropId==='mango';
+              var gridTpl=(isMangoTbl?'26px ':'')+'90px 100px 70px 60px 60px 60px '+(isMangoTbl?'60px ':'')+secCols+' 1fr 54px '+(isMangoTbl?'':'22px ')+'22px';
+              var hdrLabels=(isMangoTbl?['']:[]).concat(['Time','Op. Date','Sample #','Size','Wt (kg)','Brix']).concat(isMangoTbl?['Firm']:[]).concat(defSections.map(function(s){return (s.section||s.name||'Defect').split(' ')[0];})).concat(isMangoTbl?['Notes','P/F','']:['Notes','P/F','▼','']);
               return ce('div',{style:{minWidth:900}},
                 ce('div',{style:{display:'grid',gridTemplateColumns:gridTpl,gap:4,padding:'5px 14px',background:'var(--bg2)',borderBottom:'1px solid var(--border2)'}},
-                  hdrLabels.map(function(h,i){return ce('div',{key:i,style:{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.04em',textAlign:i>=6?'center':'left'}},h);})
+                  hdrLabels.map(function(h,i){return ce('div',{key:i,style:{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.04em',textAlign:i>=(isMangoTbl?8:6)?'center':'left'}},h);})
                 ),
                 pRows.map(function(row,ri){
                   var rowCrit=defSections.some(function(sec){return sec.items.some(function(d){return d.sev==='Critical'&&(parseFloat(row.defects[d.key])||0)>0;});});
                   var isExp=expandedRow===row.id;
                   return ce('div',{key:row.id},
                     ce('div',{style:{display:'grid',gridTemplateColumns:gridTpl,gap:4,padding:'5px 14px',borderBottom:isExp?'none':'1px solid var(--border)',background:rowCrit?'#fff8f8':ri%2===0?'transparent':'rgba(0,0,0,.015)',alignItems:'center'}},
+                      isMangoTbl&&ce('div',{
+                        onClick:function(id){return function(){setExpandedRow(expandedRow===id?null:id);};}(row.id),
+                        title:isExp?'Hide defects':'Open defect entry (S'+(ri+1)+')',
+                        style:{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:'pointer',userSelect:'none',alignSelf:'center'}
+                      },
+                        ce('span',{style:{fontSize:8,fontWeight:600,color:'var(--text3)',lineHeight:1,letterSpacing:'.02em'}},'S'+(ri+1)),
+                        ce('div',{style:{width:20,height:20,borderRadius:4,background:isExp?'var(--accent)':'transparent',border:'1px solid '+(isExp?'var(--accent)':'var(--border2)'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:600,lineHeight:1,color:isExp?'#fff':'var(--text3)',transition:'background .15s,color .15s,border-color .15s'}},isExp?'−':'+')
+                      ),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',minWidth:84,background:'var(--card)'},type:'time',value:row.time,onChange:function(i,id){return function(e){updateRowField(i,id,'time',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',background:'var(--card)'},type:'date',value:row.opDate||'',onChange:function(i,id){return function(e){updateRowField(i,id,'opDate',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',min:'0',step:'1',value:row.sampleSize||'',placeholder:'#',onChange:function(i,id){return function(e){updateRowField(i,id,'sampleSize',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',min:'0',step:'1',value:row.size||'',placeholder:'size',onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',step:'0.1',value:row.cartonWt,placeholder:'kg',onChange:function(i,id){return function(e){updateRowField(i,id,'cartonWt',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',step:'0.1',value:row.brix,placeholder:'°Bx',onChange:function(i,id){return function(e){updateRowField(i,id,'brix',e.target.value);};}(pIdx,row.id)}),
+                      isMangoTbl&&ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',step:'0.1',min:'0',value:(row.extraFields||{}).firmness||'',placeholder:'firm',onChange:function(i,id){return function(e){updateRowExtra(i,id,'firmness',e.target.value);};}(pIdx,row.id)}),
                       defSections.map(function(sec){
                         var secTotal=sec.items.reduce(function(sum,d){return sum+(parseFloat(row.defects[d.key])||0);},0);
                         var secOver=sec.items.some(function(d){var thresh=thresholds[d.key]!==undefined?thresholds[d.key]:d.thresh;return thresh===0?(parseFloat(row.defects[d.key])||0)>0:(parseFloat(row.defects[d.key])||0)>thresh;});
                         var secBg=secBgFor(sec);
                         var secText=secTextFor(sec);
-                        return ce('div',{key:sec.section,style:{textAlign:'center',padding:'3px 2px',borderRadius:4,background:secOver?'var(--red-bg)':secBg,border:'1px solid '+(secOver?'var(--red-border)':'transparent')}},
+                        return ce('div',{key:sec.section,onClick:function(id){return function(){setExpandedRow(expandedRow===id?null:id);};}(row.id),title:isExp?'Click to hide defect entry':'Click to enter '+(sec.section||'defect')+' values',style:{textAlign:'center',padding:'3px 2px',borderRadius:4,cursor:'pointer',outline:isExp?'2px solid var(--accent)':'none',outlineOffset:isExp?-2:0,background:secOver?'var(--red-bg)':secBg,border:'1px solid '+(secOver?'var(--red-border)':'transparent')}},
                           ce('div',{style:{fontFamily:'var(--font-mono)',fontSize:12,fontWeight:600,color:secOver?'var(--red)':secText}},secTotal>0?secTotal.toFixed(1):'—'),
                           ce('div',{style:{fontSize:8,color:secOver?'var(--red)':secText,opacity:.7}},sec.items.length+' items')
                         );
                       }),
-                      ce('input',{style:{padding:'4px 6px',border:'1px solid var(--border2)',borderRadius:4,fontSize:11,width:'100%',background:'var(--card)'},placeholder:'Notes...',value:row.notes,onChange:function(i,id){return function(e){updateRowField(i,id,'notes',e.target.value);};}(pIdx,row.id)}),
+                      isMangoTbl
+                      ?ce('div',{
+                          onMouseEnter:function(e){
+                            var popup=document.getElementById('mnp-'+row.id);
+                            if(!popup) return;
+                            var rect=e.currentTarget.getBoundingClientRect();
+                            var ph=popup.offsetHeight||130;
+                            popup.style.top=(rect.top+window.scrollY-ph-8)+'px';
+                            popup.style.left=Math.max(4,rect.left+window.scrollX-80)+'px';
+                            popup.style.display='block';
+                          },
+                          onMouseLeave:function(e){
+                            setTimeout(function(){
+                              var popup=document.getElementById('mnp-'+row.id);
+                              if(popup&&document.activeElement!==popup.querySelector('textarea'))popup.style.display='none';
+                            },150);
+                          }
+                        },
+                          ce('div',{style:{padding:'3px 6px',borderRadius:4,border:'1px solid '+(row.notes?'var(--accent)':'var(--border2)'),background:row.notes?'#edf5e9':'var(--card)',cursor:'text',fontSize:11,color:row.notes?'var(--accent)':'var(--text3)',minHeight:26,display:'flex',alignItems:'center',gap:4,overflow:'hidden'}},
+                            ce('span',{style:{flexShrink:0,fontSize:12}},'✏︎'),
+                            row.notes&&ce('span',{style:{fontSize:10,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}},row.notes)
+                          ),
+                          ce('div',{id:'mnp-'+row.id,style:{display:'none',position:'fixed',zIndex:99999,background:'var(--card)',border:'1.5px solid var(--border2)',borderRadius:8,boxShadow:'0 8px 32px rgba(0,0,0,.22)',padding:10,width:240,pointerEvents:'all'}},
+                            ce('div',{style:{fontSize:10,fontWeight:700,color:'var(--text3)',marginBottom:6,textTransform:'uppercase',letterSpacing:'.05em'}},'Sample notes'),
+                            ce('textarea',{
+                              style:{width:'100%',minHeight:90,padding:'6px 8px',border:'1px solid var(--border2)',borderRadius:6,fontSize:12,resize:'vertical',background:'var(--card)',fontFamily:'inherit',outline:'none',boxSizing:'border-box'},
+                              placeholder:'Add notes...',value:row.notes,
+                              onBlur:function(id){return function(){var p=document.getElementById('mnp-'+id);if(p)p.style.display='none';};}(row.id),
+                              onChange:function(i,id){return function(e){updateRowField(i,id,'notes',e.target.value);};}(pIdx,row.id)
+                            })
+                          )
+                        )
+                      :ce('input',{style:{padding:'4px 6px',border:'1px solid var(--border2)',borderRadius:4,fontSize:11,width:'100%',background:'var(--card)'},placeholder:'Notes...',value:row.notes,onChange:function(i,id){return function(e){updateRowField(i,id,'notes',e.target.value);};}(pIdx,row.id)}),
                       ce('div',{style:{display:'flex',flexDirection:'column',gap:2}},
                         ce('button',{style:{padding:'2px 4px',fontSize:9,fontWeight:700,borderRadius:3,border:'1px solid '+(row.pass===true?'var(--green)':'var(--border2)'),background:row.pass===true?'var(--green)':'transparent',color:row.pass===true?'#fff':'var(--text3)',cursor:'pointer',lineHeight:1.2},onClick:function(i,id){return function(){updateRowField(i,id,'pass',true);};}(pIdx,row.id)},'PASS'),
                         ce('button',{style:{padding:'2px 4px',fontSize:9,fontWeight:700,borderRadius:3,border:'1px solid '+(row.pass===false?'var(--red)':'var(--border2)'),background:row.pass===false?'var(--red)':'transparent',color:row.pass===false?'#fff':'var(--text3)',cursor:'pointer',lineHeight:1.2},onClick:function(i,id){return function(){updateRowField(i,id,'pass',false);};}(pIdx,row.id)},'FAIL')
                       ),
-                      ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--accent)',fontSize:13,padding:0,lineHeight:1,fontWeight:600},onClick:function(){setExpandedRow(isExp?null:row.id);}},isExp?'▲':'▼'),
+                      !isMangoTbl&&ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--accent)',fontSize:13,padding:0,lineHeight:1,fontWeight:600},onClick:function(){setExpandedRow(isExp?null:row.id);}},isExp?'▲':'▼'),
                       ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:14,padding:0,lineHeight:1},title:'Remove row',onClick:function(i,id){return function(){removeRow(i,id);};}(pIdx,row.id)},pRows.length>1?'\u00d7':'')
                     ),
                     isExp&&ce('div',{style:{background:'#f8f4f0',borderBottom:'1px solid var(--border)',padding:'10px 14px'}},
@@ -3880,7 +4018,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                     ),
                     ce('div',null,
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Size'),
-                      ce('select',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,background:'var(--card)',minHeight:40},value:row.size,onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)},CITRUS_SIZES.map(function(s){return ce('option',{key:s,value:s},s);}))
+                      cropId==='mango'?ce('input',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,fontFamily:'var(--font-mono)',textAlign:'right',background:'var(--card)',minHeight:40},type:'number',min:'0',step:'1',value:row.size||'',placeholder:'count',onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)}):ce('select',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,background:'var(--card)',minHeight:40},value:row.size,onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)},CITRUS_SIZES.map(function(s){return ce('option',{key:s,value:s},s);}))
                     ),
                     ce('div',null,
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Wt kg'),
@@ -3889,6 +4027,10 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                     ce('div',null,
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Brix °'),
                       ce('input',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,fontFamily:'var(--font-mono)',textAlign:'right',background:'var(--card)',minHeight:40},type:'number',step:'0.1',value:row.brix,placeholder:'°Bx',onChange:function(i,id){return function(e){updateRowField(i,id,'brix',e.target.value);};}(pIdx,row.id)})
+                    ),
+                    cropId==='mango'&&ce('div',null,
+                      ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Firmness'),
+                      ce('input',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,fontFamily:'var(--font-mono)',textAlign:'right',background:'var(--card)',minHeight:40},type:'number',step:'0.1',min:'0',value:(row.extraFields||{}).firmness||'',placeholder:'firm',onChange:function(i,id){return function(e){updateRowExtra(i,id,'firmness',e.target.value);};}(pIdx,row.id)})
                     ),
                     ce('div',{style:{gridColumn:'span 2'}},
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Notes'),
@@ -3899,12 +4041,12 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                 cropId!=='grapes'&&ce('div',{style:{padding:'8px 12px',borderBottom:'1px solid var(--border)'}},
                   ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:6}},'Key defects (%)'),
                   ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:6}},
-                    ['blemish','sunburn','mech_dmg','thrips','oil_spots'].map(function(key){
+                    (cropId==='mango'?['blemish','sun_burn','anthracnose','latex_burn','bruising']:['blemish','sunburn','mech_dmg','thrips','oil_spots']).map(function(key){
                       var def=null;defSections.forEach(function(sec){sec.items.forEach(function(d){if(d.key===key)def=d;});});
                       var v=parseFloat(row.defects[key])||0;
                       var thresh=thresholds[key]!==undefined?thresholds[key]:(def?def.thresh:0);
                       var over=thresh===0?v>0:v>thresh;
-                      var shortLabel={blemish:'Blem',sunburn:'Sun',mech_dmg:'Mech',thrips:'Thrips',oil_spots:'Oil'};
+                      var shortLabel={blemish:'Blem',sunburn:'Sun',mech_dmg:'Mech',thrips:'Thrips',oil_spots:'Oil',sun_burn:'Sun',anthracnose:'Anthr',latex_burn:'Latex',bruising:'Bruis'};
                       return ce('div',{key:key,style:{textAlign:'center'}},
                         ce('div',{style:{fontSize:9,color:over?'var(--red)':'var(--text3)',fontWeight:600,marginBottom:3,textTransform:'uppercase'}},shortLabel[key]||key),
                         ce('input',{style:{width:'100%',padding:'6px 4px',border:'1.5px solid '+(over?'var(--red)':'var(--border2)'),borderRadius:6,fontSize:15,fontFamily:'var(--font-mono)',textAlign:'center',background:over?'var(--red-bg)':'var(--card)',color:over?'var(--red)':'var(--text)',minHeight:40},type:'number',step:'0.1',min:'0',value:row.defects[key],onChange:function(i,id,k){return function(e){updateRowDefect(i,id,k,e.target.value);};}(pIdx,row.id,key)})
@@ -4022,16 +4164,16 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
       ),
       /* TRACE & CLEARANCE */
       ce('div',{className:'card',style:{marginBottom:12}},
-        ce('div',{className:'section-title'},ce('div',{className:'section-title-bar',style:{background:'#5a7ab0'}}),cropId==='grapes'?'Line clearance':'Traceability & line clearance'),
-        cropId!=='grapes'&&ce('div',{className:'form-field',style:{marginBottom:12}},
+        ce('div',{className:'section-title'},ce('div',{className:'section-title-bar',style:{background:'#5a7ab0'}}),(cropId==='grapes'||cropId==='mango')?'Line clearance':'Traceability & line clearance'),
+        cropId!=='grapes'&&cropId!=='mango'&&ce('div',{className:'form-field',style:{marginBottom:12}},
           ce('label',{className:'form-label'},'Trace codes'),
           traceCodes.map(function(tc,ti){
             return ce('div',{key:ti,style:{display:'flex',gap:6,marginBottom:6,alignItems:'center'}},
-              ce('input',{className:'form-input',value:tc,onChange:function(idx){return function(e){setTraceCodes(function(prev){var n=prev.slice();n[idx]=e.target.value;return n;});};}(ti),style:{fontFamily:'var(--font-mono)',fontSize:12,flex:1},placeholder:'e.g. 111031325042104'}),
+              ce('input',{className:'form-input',value:(typeof tc==='string'?tc:(tc&&tc.code)||''),onChange:function(idx){return function(e){setTraceCodes(function(prev){var n=prev.slice();var cur=n[idx];n[idx]=(cur&&typeof cur==='object')?Object.assign({},cur,{code:e.target.value}):{code:e.target.value,variety:null};return n;});};}(ti),style:{fontFamily:'var(--font-mono)',fontSize:12,flex:1},placeholder:'e.g. 111031325042104'}),
               traceCodes.length>1&&ce('button',{onClick:function(idx){return function(){setTraceCodes(function(prev){return prev.filter(function(_,i){return i!==idx;});});};}(ti),style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:16,lineHeight:1,padding:'0 4px',flexShrink:0}},'\u00d7')
             );
           }),
-          ce('button',{className:'btn btn-secondary btn-sm',style:{marginTop:2},onClick:function(){setTraceCodes(function(prev){return prev.concat(['']);});}},'\u002b Add trace code')
+          ce('button',{className:'btn btn-secondary btn-sm',style:{marginTop:2},onClick:function(){setTraceCodes(function(prev){return prev.concat([{code:'',variety:null}]);});}},'\u002b Add trace code')
         ),
         ce('div',{className:'clearance-grid'},
           CLEARANCE_ITEMS.map(function(item,i){
@@ -4467,11 +4609,15 @@ function FGView(props){
     setSelBData(function(prev){var u={};u[batchId]={loading:true,defects:{},pallets:[]};return Object.assign({},prev,u);});
     /* Fetch pallet list + sample defect totals per pallet */
     Promise.all([
-      supabase.from('pallets').select('id,pallet_number').eq('inspection_id',batchId).order('pallet_number'),
+      supabase.from('pallets').select('id,pallet_number,container_number').eq('inspection_id',batchId).order('pallet_number'),
       supabase.from('sample_rows').select('id,pallet_id,sample_defect_readings(value,defects(key,severity))').eq('inspection_id',batchId)
     ]).then(function(results){
       var palR=results[0]; var srR=results[1];
-      if(palR.error||srR.error) return;
+      if(palR.error||srR.error){
+        console.warn('[DalOS] pallet popup fetch error:',palR.error||srR.error);
+        setSelBData(function(prev){var u={};u[batchId]={loading:false,defects:{},pallets:[],error:true};return Object.assign({},prev,u);});
+        return;
+      }
       /* Build defects map (all keys summed, averaged across samples) */
       var defMap={}; var sampleCount=0;
       (srR.data||[]).forEach(function(row){
@@ -4502,9 +4648,12 @@ function FGView(props){
             else min+=parseFloat(dr.value);
           });
         });
-        return {id:p.id,label:p.pallet_number,crit:crit/pCount,maj:maj/pCount,min:min/pCount,samples:pCount};
+        return {id:p.id,label:p.pallet_number,container:p.container_number||'',crit:crit/pCount,maj:maj/pCount,min:min/pCount,samples:pCount};
       });
       setSelBData(function(prev){var u={};u[batchId]={loading:false,defects:defMap,pallets:pallets};return Object.assign({},prev,u);});
+    }).catch(function(err){
+      console.warn('[DalOS] pallet popup fetch threw:',err);
+      setSelBData(function(prev){var u={};u[batchId]={loading:false,defects:{},pallets:[],error:true};return Object.assign({},prev,u);});
     });
   },[sel]);
   var sPP=useState(null); var palletPopup=sPP[0]; var setPalletPopup=sPP[1];
@@ -4602,6 +4751,19 @@ function FGView(props){
   var sSrch=useState(''); var searchQ=sSrch[0]; var setSearchQ=sSrch[1];
   var sSrchFocus=useState(false); var searchFocus=sSrchFocus[0]; var setSearchFocus=sSrchFocus[1];
   var sCollapsed=useState({}); var collapsedLots=sCollapsed[0]; var setCollapsedLots=sCollapsed[1];
+  var sGrpMode=useState('lot'); var grpMode=sGrpMode[0]; var setGrpMode=sGrpMode[1];
+  /* One-time intro for the By Lot / By Container toggle (mango only) */
+  var sIntro=useState(function(){try{return (cropId==='mango'&&!localStorage.getItem('dalos_seen_view_toggle_v1'))?1:0;}catch(e){return 0;}});
+  var introStep=sIntro[0]; var setIntroStep=sIntro[1];
+  var sIntroPos=useState(null); var introPos=sIntroPos[0]; var setIntroPos=sIntroPos[1];
+  function dismissIntro(){try{localStorage.setItem('dalos_seen_view_toggle_v1','1');}catch(e){} setIntroStep(0);}
+  function introShowMe(){
+    var el=document.getElementById('dalos-view-toggle');
+    if(!el){dismissIntro();return;}
+    var r=el.getBoundingClientRect();
+    setIntroPos({top:r.bottom+10,cx:r.left+r.width/2});
+    setIntroStep(2);
+  }
 
   function toggleLot(lotKey){setCollapsedLots(function(prev){var n=Object.assign({},prev);n[lotKey]=!prev[lotKey];return n;});}
 
@@ -4890,6 +5052,32 @@ function FGView(props){
         tabs.map(function(t){return ce('div',{key:t,className:'tab'+(filter===t?' active':''),onClick:function(){setFilter(t);}},t,t!=='All'&&ce('span',{style:{marginLeft:5,background:t==='Accepted'?'#e8f5ec':t==='Rejected'?'#fdecea':'#fff3e0',color:t==='Accepted'?'#1e6b3a':t==='Rejected'?'#b01010':'#b06010',padding:'1px 5px',borderRadius:8,fontSize:10}},seasonBatches.filter(function(b){return b.status===t;}).length));})
       ),
       ce('div',{style:{display:'flex',gap:8,alignItems:'center',marginLeft:16,flexShrink:0}},
+        cropId==='mango'&&ce('div',{id:'dalos-view-toggle',style:{display:'flex',border:'1px solid var(--border2)',borderRadius:7,overflow:'hidden',flexShrink:0}},
+          [['lot','By Lot'],['container','By Container']].map(function(m){return ce('button',{key:m[0],onClick:function(mode){return function(){setGrpMode(mode);setCollapsedLots({});};}(m[0]),style:{padding:'5px 11px',fontSize:11,fontWeight:600,border:'none',cursor:'pointer',background:grpMode===m[0]?'var(--accent)':'var(--card)',color:grpMode===m[0]?'#fff':'var(--text3)'}},m[1]);})
+        ),
+        /* ── Intro step 1: announcement modal ── */
+        introStep===1&&ce('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'},onClick:dismissIntro},
+          ce('div',{style:{background:'var(--card)',borderRadius:14,border:'1px solid var(--border)',boxShadow:'0 20px 60px rgba(0,0,0,.25)',padding:'22px 24px',maxWidth:340,textAlign:'center'},onClick:function(e){e.stopPropagation();}},
+            ce('div',{style:{display:'flex',justifyContent:'center',gap:8,marginBottom:14}},
+              ce('span',{style:{background:'var(--accent)',color:'#fff',fontSize:11,fontWeight:600,padding:'4px 13px',borderRadius:6}},'By Lot'),
+              ce('span',{style:{border:'1px solid var(--border2)',color:'var(--text3)',fontSize:11,fontWeight:600,padding:'4px 13px',borderRadius:6}},'By Container')
+            ),
+            ce('div',{style:{fontFamily:'var(--font-display)',fontSize:16,fontWeight:600,color:'var(--text)',marginBottom:6}},'Two ways to browse mango inspections'),
+            ce('div',{style:{fontSize:12.5,color:'var(--text3)',lineHeight:1.55,marginBottom:16}},'Group sessions by LOT number, or flip to By Container to trace what\u2019s inside each container \u2014 including a bucket for units not yet assigned.'),
+            ce('button',{className:'btn btn-primary',style:{width:'100%',justifyContent:'center',padding:'9px 0',fontSize:13},onClick:introShowMe},'Show me'),
+            ce('div',{style:{fontSize:11.5,color:'var(--text3)',marginTop:10,cursor:'pointer',textDecoration:'underline'},onClick:dismissIntro},'Skip')
+          )
+        ),
+        /* ── Intro step 2: coachmark under the toggle ── */
+        introStep===2&&introPos&&ce('div',{style:{position:'fixed',inset:0,zIndex:200},onClick:dismissIntro},
+          ce('div',{style:{position:'fixed',top:introPos.top,left:Math.max(8,Math.min(introPos.cx-130,window.innerWidth-268)),width:260,zIndex:201},onClick:function(e){e.stopPropagation();}},
+            ce('div',{style:{position:'absolute',top:-7,left:Math.max(14,Math.min(introPos.cx-Math.max(8,Math.min(introPos.cx-130,window.innerWidth-268))-7,232)),width:0,height:0,borderLeft:'7px solid transparent',borderRight:'7px solid transparent',borderBottom:'7px solid var(--accent)'}}),
+            ce('div',{style:{background:'var(--accent)',color:'#fff',borderRadius:10,padding:'12px 14px',boxShadow:'0 12px 32px rgba(0,0,0,.28)'}},
+              ce('div',{style:{fontSize:12.5,lineHeight:1.55,marginBottom:10}},'Switch anytime. ',ce('strong',{style:{color:'#c9e8d4'}},'By Lot'),' groups units under each LOT \u2014 ',ce('strong',{style:{color:'#c9e8d4'}},'By Container'),' shows every container and its lots.'),
+              ce('button',{style:{background:'#fff',color:'var(--accent)',border:'none',borderRadius:6,fontSize:12,fontWeight:600,padding:'6px 16px',cursor:'pointer'},onClick:dismissIntro},'Got it')
+            )
+          )
+        ),
         ce('div',{style:{position:'relative'}},
           ce('input',{className:'form-input',value:searchQ,
             onChange:function(e){setSearchQ(e.target.value);setSel(null);},
@@ -4978,8 +5166,8 @@ function FGView(props){
         );
       })
     ),
-    ce('div',{style:{display:'grid',gridTemplateColumns:selB&&!isMobile?'1fr 420px':'1fr',gap:14,alignItems:'start'}},
-      ce('div',{className:'scroll-card'},
+    ce('div',{style:{display:'grid',gridTemplateColumns:selB&&!isMobile?'minmax(0,1fr) 400px':'1fr',gap:14,alignItems:'start',maxWidth:'100%'}},
+      ce('div',{className:'scroll-card',style:{minWidth:0,overflow:'hidden'}},
         ce('div',{style:{overflowX:'auto',WebkitOverflowScrolling:'touch'}},
         ce('table',{style:{minWidth:800}},
           ce('thead',null,ce('tr',null,
@@ -5016,9 +5204,12 @@ function FGView(props){
               )
             )):
             (function(){
-              var groups=cropId==='grapes'?buildContainerGroups(rows):buildLotGroups(rows);
+              var useContGroups=cropId==='grapes'||(cropId==='mango'&&grpMode==='container');
+              var mangoContLots={};
+              if(cropId==='mango'){rows.forEach(function(bb){var cc=getContainer(bb);if(!cc)return;var ll=bb.lot||'';if(!mangoContLots[cc])mangoContLots[cc]={};mangoContLots[cc][ll]=1;});}
+              var groups=useContGroups?buildContainerGroups(rows):buildLotGroups(rows);
               return groups.reduce(function(acc,grp){
-                var isGrapesGroup=cropId==='grapes';
+                var isGrapesGroup=useContGroups;
                 var groupKey=isGrapesGroup?(grp.contKey||'__unassigned__'):grp.lotKey;
                 var units=grp.units;
                 var isCollapsed=!!collapsedLots[groupKey];
@@ -5036,13 +5227,17 @@ function FGView(props){
                       )
                     :ce('span',{style:{fontSize:12,fontWeight:700,color:'#fde68a',letterSpacing:'.02em'}},'Unassigned sessions')
                   )
-                  :ce('span',{style:{fontFamily:'var(--font-mono)',fontSize:12,fontWeight:700,letterSpacing:'.03em'}},groupKey==='(no lot)'?'No LOT':'LOT '+groupKey);
+                  :ce('div',{style:{display:'flex',flexDirection:'column',gap:1}},
+                      ce('span',{style:{fontSize:9,fontWeight:500,color:'rgba(255,255,255,.45)',textTransform:'uppercase',letterSpacing:'.08em',lineHeight:1}},'Lot'),
+                      ce('span',{style:{fontFamily:'var(--font-mono)',fontSize:13,fontWeight:700,color:'#fff',letterSpacing:'.04em',lineHeight:1.2}},groupKey==='(no lot)'?'No LOT':groupKey)
+                    );
                 acc.push(ce('tr',{key:'ghdr-'+groupKey,onClick:function(k){return function(){toggleLot(k);};}(groupKey),style:{cursor:'pointer',background:hdrBg,borderTop:'2px solid rgba(255,255,255,.06)'}},
                   ce('td',{colSpan:11,style:{padding:'7px 14px'}},
                     ce('div',{style:{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
                       ce('span',{style:{fontSize:10,color:'rgba(255,255,255,.35)',userSelect:'none',width:12}},isCollapsed?'▶':'▼'),
                       hdrLabel,
                       ce('span',{style:{fontSize:11,color:'rgba(255,255,255,.35)',borderLeft:'1px solid rgba(255,255,255,.12)',paddingLeft:10}},units.length===1?'1 session':units.length+' sessions'),
+                      cropId==='mango'&&isGrapesGroup&&grp.contKey&&(function(){var ls={};units.forEach(function(u){ls[u.lot||'']=1;});var n=Object.keys(ls).length;return n>1?ce('span',{style:{fontSize:10,background:'rgba(253,230,138,.18)',color:'#fde68a',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(253,230,138,.3)',fontWeight:600}},n+' lots'):null;})(),
                       accUnits.length>0&&ce('span',{style:{fontSize:10,background:'rgba(110,231,183,.18)',color:'#6ee7b7',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(110,231,183,.25)'}},'✓ '+accUnits.length+' accepted'),
                       rejUnits.length>0&&ce('span',{style:{fontSize:10,background:'rgba(239,68,68,.22)',color:'#fca5a5',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(239,68,68,.3)'}},'✗ '+rejUnits.length+' rejected'),
                       escUnits.length>0&&ce('span',{style:{fontSize:10,background:'rgba(99,102,241,.3)',color:'#c7d2fe',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(99,102,241,.4)',fontWeight:600}},'⬆ '+escUnits.length+' escalated')
@@ -5056,7 +5251,7 @@ function FGView(props){
                       ce('td',{style:{width:28,paddingLeft:14}},''),
                       ce('td',null,
                         ce('div',{style:{display:'flex',alignItems:'center',gap:6}},
-                          cropId==='grapes'&&ce('button',{
+                          (cropId==='grapes'||cropId==='mango')&&ce('button',{
                             className:'btn btn-sm',
                             style:{background:'var(--bg2)',border:'1px solid var(--border2)',color:'var(--text3)',padding:'2px 7px',display:'inline-flex',alignItems:'center',gap:4,flexShrink:0,borderRadius:5,fontFamily:'var(--font-mono)',fontSize:10,fontWeight:600},
                             title:'View pallets in this session',
@@ -5068,6 +5263,7 @@ function FGView(props){
                           cont
                             ? ce('div',null,
                                 ce('span',{style:{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text)',fontWeight:500}},cont),
+                                cropId==='mango'&&!useContGroups&&mangoContLots[cont]&&Object.keys(mangoContLots[cont]).length>1&&ce('span',{title:'This container also carries another lot',style:{marginLeft:5,fontSize:9,background:'#fff3e0',color:'#b06010',border:'1px solid #e8c87a',borderRadius:8,padding:'0 5px',fontWeight:600,verticalAlign:'middle'}},'shared'),
                                 ce('div',{style:{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)',marginTop:1}},b.id)
                               )
                             : ce('div',null,
@@ -5229,10 +5425,11 @@ function FGView(props){
             ce('span',{style:{fontFamily:'var(--font-mono)',color:selB.totalDefect>10?'var(--red)':selB.totalDefect>5?'var(--amber)':'var(--green)'}},selB.totalDefect.toFixed(2)+'%')
           ),
           /* Pallets summary — grapes only */
-          cropId==='grapes'&&(function(){
+          (cropId==='grapes'||cropId==='mango')&&(function(){
             var bd=selBData[selB.id]||{};
             var pallets=bd.pallets||[];
             if(bd.loading) return ce('div',{style:{fontSize:11,color:'var(--text3)',padding:'4px 0'}},'Loading pallets...');
+            if(bd.error) return ce('div',{style:{fontSize:11,color:'var(--amber)',padding:'4px 0',cursor:'pointer',textDecoration:'underline'},onClick:function(){var bid=selB.id;setSelBData(function(prev){var u=Object.assign({},prev);delete u[bid];return u;});setSel(null);setTimeout(function(){setSel(bid);},60);}},'Could not load pallets — tap to retry');
             if(pallets.length===0) return null;
             return ce('div',{style:{marginTop:8}},
               ce('div',{style:{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:6}},'Pallets ('+pallets.length+')'),
@@ -5244,7 +5441,10 @@ function FGView(props){
                     ce('rect',{x:4,y:9,width:16,height:5,rx:1}),
                     ce('rect',{x:6,y:5,width:12,height:4,rx:1})
                   ),
-                  ce('div',{style:{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:600,color:hasCrit?'var(--red)':'var(--text)',flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},p.label),
+                  ce('div',{style:{flex:1,minWidth:0,overflow:'hidden'}},
+                    ce('div',{style:{fontFamily:'var(--font-mono)',fontSize:11,fontWeight:600,color:hasCrit?'var(--red)':'var(--text)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},p.label),
+                    p.container&&ce('div',{style:{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--text3)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},p.container)
+                  ),
                   ce('div',{style:{display:'flex',gap:4,flexShrink:0}},
                     p.crit>0&&ce('span',{style:{fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--red-bg)',color:'var(--red)',fontFamily:'var(--font-mono)',fontWeight:600}},'C '+p.crit.toFixed(1)+'%'),
                     p.maj>0&&ce('span',{style:{fontSize:9,padding:'1px 5px',borderRadius:3,background:'var(--amber-bg)',color:'var(--amber)',fontFamily:'var(--font-mono)',fontWeight:600}},'M '+p.maj.toFixed(1)+'%'),
@@ -5409,7 +5609,7 @@ function FGView(props){
             ce('span',null,'Total defect'),
             ce('span',{style:{fontFamily:'var(--font-mono)',color:selB.totalDefect>10?'var(--red)':selB.totalDefect>5?'var(--amber)':'var(--green)'}},selB.totalDefect.toFixed(2)+'%')
           ),
-          cropId==='grapes'&&(function(){
+          (cropId==='grapes'||cropId==='mango')&&(function(){
             var bd=selBData[selB.id]||{};
             var pallets=bd.pallets||[];
             if(bd.loading) return null;
@@ -7140,7 +7340,7 @@ function HomeView(props){
       ce('div',{className:'dh-tb-l'},
         
         ce('div',{className:'dh-logo'},ce('span',{style:{color:'#fff'}},'Dal'),ce('span',{style:{color:'#6fc191'}},'OS'),ce('span',{style:{color:'#5d8a6d',fontFamily:'var(--font-body)',fontSize:14,fontWeight:500,marginLeft:4}},'Vision')),
-        ce('div',{className:'dh-ver'},DALOS_BUILD.split(' ')[0]),ce('a',{className:'dh-pill',href:(location.pathname.indexOf('/dalos-vision-dev/')===0?'https://daltexcorp-opsexcellence.github.io/dalos-workspace-dev/':'https://daltexcorp-opsexcellence.github.io/dalos-workspace/'),title:'Back to DalOS Workspace',style:{textDecoration:'none',height:28,padding:'0 11px',fontSize:11,marginLeft:4}},ce('span',{style:{display:'inline-flex',alignItems:'center',marginRight:1},dangerouslySetInnerHTML:{__html:'<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>'}}),'Workspace')
+        ce('div',{className:'dh-ver'},DALOS_BUILD.split(' ')[0]),ce('a',{className:'dh-pill',href:(location.pathname.indexOf('/dalos-vision-dev/')===0?'https://daltexcorp-opsexcellence.github.io/dalos-workspace-dev/':'https://daltexcorp-opsexcellence.github.io/dalos-workspace/workspace.html'),title:'Back to DalOS Workspace',style:{textDecoration:'none',height:28,padding:'0 11px',fontSize:11,marginLeft:4}},ce('span',{style:{display:'inline-flex',alignItems:'center',marginRight:1},dangerouslySetInnerHTML:{__html:'<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>'}}),'Workspace')
       ),
       ce('div',{className:'dh-tb-r'},
         ce('div',{className:'dh-pill dh-season-pill'},
@@ -14191,6 +14391,12 @@ var IPATHS={
 };
 
 function App(){
+  /* FIX (re-send guard): last dispatch time per inspection id, in App scope where
+     addBatch lives. A human retry after a conflict is always seconds apart; a runaway
+     automatic re-send hammers far faster. We ignore any dispatch for the same id
+     within a 3s cooldown — kills the CONFLICT loop without weakening the lock or
+     blocking a real tap. */
+  var lastDispatchRef=React.useRef({});
   var sUser=useState(null); var currentUser=sUser[0]; var setCurrentUser=sUser[1];
   var sSessionExp=useState(false); var sessionExpired=sSessionExp[0]; var setSessionExpired=sSessionExp[1];
   var sc=useState(null); var cropId=sc[0]; var setCropId=sc[1];
@@ -14301,6 +14507,7 @@ function App(){
                 traceCode:row.trace_code||'', traceCodes:(function(){var r=normTC(row.trace_codes&&row.trace_codes.length?row.trace_codes:(row.trace_code?[row.trace_code]:[]));return r.length?r:[{code:'',variety:null}];})(),
                 extraLabels:row.extra_labels||[],
                 stickerChecks:(function(){var sc={product:false,variety:false,cls:false,phName:false,phCode:false,farmCode:false,packDate:false,netWt:false,trace:false,ggn:false,lot:false,importer:false,origin:false};(row.inspection_sticker_checks||[]).forEach(function(c){sc[c.field_key]=c.confirmed;});return sc;})(),
+                clearance:(function(){var cl={c0:'Compliant',c1:'Compliant',c2:'Compliant',c3:'Compliant'};(row.inspection_clearance||[]).forEach(function(it){cl['c'+it.item_index]=it.status;});return cl;})(),
                 cartonColor:row.carton_color||'', cartonCompany:row.carton_company||'', cartonCompany2:row.carton_company2||'',
                 ggn:row.ggn||'', phCode:row.ph_code||'', farmCode:row.farm_code||'', netWt:row.net_weight||'',
                 importer:row.importer||'', importerAddr:row.importer_address||'', stickerImg:row.sticker_image_url||'',
@@ -14561,30 +14768,41 @@ function App(){
             /* Fetch ALL pallets across loaded inspections, paginating past the PostgREST 1000-row cap.
                A single .in() returns max 1000 rows; with thousands of pallets per season most were
                dropped, so pallet-number search silently missed them. */
-            function fetchAllPallets(ids){
-              if(!ids||!ids.length) return Promise.resolve({data:[]});
+            /* Generic paginated IN-fetch — walks past the PostgREST 1000-row cap.
+               makeQuery() returns a FRESH query WITH .select()/.in()/.order() but WITHOUT .range().
+               A stable .order() is required so rows don't shift between pages. */
+            function fetchAllPaged(makeQuery){
               var acc=[];
               function page(from){
-                return supabase.from('pallets').select('inspection_id,pallet_number,container_number')
-                  .in('inspection_id',ids)
-                  .order('inspection_id',{ascending:true}).order('pallet_number',{ascending:true})
-                  .range(from,from+999)
-                  .then(function(r){
-                    if(r.error) return {data:acc,error:r.error};
-                    var batch=r.data||[];
-                    acc=acc.concat(batch);
-                    if(batch.length<1000) return {data:acc};
-                    return page(from+1000);
-                  });
+                return makeQuery().range(from,from+999).then(function(r){
+                  if(r.error) return {data:acc,error:r.error};
+                  var batch=r.data||[];
+                  acc=acc.concat(batch);
+                  if(batch.length<1000) return {data:acc};
+                  return page(from+1000);
+                });
               }
               return page(0);
+            }
+            function fetchAllPallets(ids){
+              if(!ids||!ids.length) return Promise.resolve({data:[]});
+              return fetchAllPaged(function(){
+                return supabase.from('pallets').select('inspection_id,pallet_number,container_number')
+                  .in('inspection_id',ids)
+                  .order('inspection_id',{ascending:true}).order('pallet_number',{ascending:true});
+              });
             }
             /* Fetch pallets + related tables in parallel using IN-clause lookups (avoids N+1 joins in the view query) */
             return Promise.all([
               fetchAllPallets(noIds?[]:inspectionIds),
-              noIds?Promise.resolve({data:[]}):supabase.from('inspection_clearance').select('inspection_id,item_index,item_label,status').in('inspection_id',inspectionIds),
-              noIds?Promise.resolve({data:[]}):supabase.from('inspection_escalations').select('inspection_id,escalation_note,escalated_at,resolution,resolution_comment,escalated_by,round,users!escalated_by(full_name)').in('inspection_id',inspectionIds).order('round',{ascending:false}),
-              noIds?Promise.resolve({data:[]}):supabase.from('inspection_sticker_checks').select('inspection_id,field_key,confirmed').in('inspection_id',inspectionIds)
+              noIds?Promise.resolve({data:[]}):fetchAllPaged(function(){return supabase.from('inspection_clearance').select('inspection_id,item_index,item_label,status').in('inspection_id',inspectionIds).order('inspection_id',{ascending:true}).order('item_index',{ascending:true});}),
+              noIds?Promise.resolve({data:[]}):fetchAllPaged(function(){return supabase.from('inspection_escalations').select('inspection_id,escalation_note,escalated_at,resolution,resolution_comment,escalated_by,round,users!escalated_by(full_name)').in('inspection_id',inspectionIds).order('inspection_id',{ascending:true}).order('round',{ascending:false});}),
+              /* Sticker checks are NOT bulk-loaded — they feed ONLY the edit form (the list
+                 table and detail panel never show them). Bulk-fetching them meant an 8-page
+                 (~7.8k row) walk on every list load. The edit form now fetches just this one
+                 inspection's rows lazily on open (see the sticker-checks useEffect in
+                 InspectionForm). refreshBatchesById still repopulates them after a save. */
+              Promise.resolve({data:[]})
             ]).then(function(results){
               var pr=results[0],cr=results[1],er=results[2],sr=results[3];
               var palletsByInspection={};
@@ -14827,11 +15045,218 @@ function App(){
       return next;
     });
   }
+  /* Assemble the full-inspection JSON payload for the atomic mango save RPC
+     (save_mango_inspection_full). Mirrors the legacy field mapping exactly so
+     the transactional path writes identical data to the 6-write path. */
+  function buildMangoSavePayload(newBatch, userId, seasonId, isEditFlag, editId){
+    var productId=(function(){var p=(config.products||[]).find(function(pr){return pr.id===newBatch.crop||pr.name.toLowerCase()===(newBatch.crop||'').toLowerCase();});return p?p.id:newBatch.crop;})();
+    var palletPrefix=(newBatch.palletPrefix)||'';
+    /* Header — same resolutions as the legacy inspectionRow */
+    var header={
+      product_id:productId,
+      season_id:seasonId||null,
+      packhouse_id:newBatch.packhouse,
+      lot_number:newBatch.lot||'',
+      date:newBatch.date||null,
+      status:newBatch.status||'Pending',
+      decision:newBatch.decision||null,
+      submitted_at:new Date().toISOString(),
+      created_by:userId||null,
+      variety_id:(config.varietiesIdMap&&newBatch.variety&&config.varietiesIdMap[newBatch.variety])||null,
+      variety2_id:(config.varietiesIdMap&&newBatch.variety2&&config.varietiesIdMap[newBatch.variety2])||null,
+      variety_type:newBatch.varietyType||'single',
+      client_id:(config.clientsIdMap&&newBatch.client&&config.clientsIdMap[newBatch.client])||null,
+      sub_client_id:(config.subClientNameToId&&newBatch.client&&config.subClientNameToId[newBatch.client])||null,
+      class_id:(config.classesIdMap&&newBatch.cls&&config.classesIdMap[newBatch.cls])||null,
+      country_id:(config.countriesIdMap&&newBatch.country&&config.countriesIdMap[newBatch.country])||null,
+      carton_type_id:(config.cartonTypesIdMap&&newBatch.cartonType&&config.cartonTypesIdMap[newBatch.cartonType])||null,
+      avg_total_defect:newBatch.totalDefect||null,
+      has_critical:newBatch.hasCrit||false
+    };
+    if(isEditFlag){
+      header.id=editId;
+      header.loaded_version=newBatch.loadedVersion||'';
+      header.last_edited_by=userId||null;
+      /* On edit, do not force submitted_at (RPC never touches it) */
+      delete header.submitted_at;
+    }
+    if(newBatch.container) header.container_number=newBatch.container;
+    if(newBatch.wax) header.wax=newBatch.wax;
+    if(newBatch.packing) header.packing=newBatch.packing;
+    if(newBatch.labelling) header.labelling=newBatch.labelling;
+    if(newBatch.traceCode) header.trace_code=newBatch.traceCode;
+    header.trace_codes=newBatch.traceCodes?newBatch.traceCodes.filter(function(tc){var code=typeof tc==='string'?tc.trim():(tc&&tc.code&&tc.code.trim())||'';return !!code;}).map(function(tc){return typeof tc==='string'?{code:tc.trim(),variety:null}:tc;}):[];
+    if(newBatch.cartonColor) header.carton_color=newBatch.cartonColor;
+    if(newBatch.cartonCompany) header.carton_company=newBatch.cartonCompany;
+    if(newBatch.ggn) header.ggn=newBatch.ggn;
+    if(newBatch.phCode) header.ph_code=newBatch.phCode;
+    if(newBatch.brix) header.avg_brix=newBatch.brix;
+    if(newBatch.cartonWt) header.avg_carton_weight=newBatch.cartonWt;
+    if(newBatch.farmCode) header.farm_code=newBatch.farmCode;
+    if(newBatch.netWt) header.net_weight=newBatch.netWt;
+    if(newBatch.importer) header.importer=newBatch.importer;
+    if(newBatch.importerAddr) header.importer_address=newBatch.importerAddr;
+    if(newBatch.stickerImg) header.sticker_image_url=newBatch.stickerImg;
+    if(newBatch.extraLabels) header.extra_labels=newBatch.extraLabels;
+    if(newBatch.farm) header.farm_id=(config.farmsIdMap&&config.farmsIdMap[newBatch.farm])||null;
+    if(newBatch.formOpenedAt instanceof Date){
+      header.draft_started_at=newBatch.formOpenedAt.toISOString();
+      header.completion_minutes=Math.max(0,Math.round((Date.now()-newBatch.formOpenedAt.getTime())/60000));
+    }
+    /* Pallets → samples → defect readings (defects passed by KEY, resolved server-side) */
+    var pallets=(newBatch.pallets||[]).map(function(p){
+      var lbl=(p.palletLabel||'').trim();
+      var palletNumber=lbl?((palletPrefix&&!lbl.startsWith(palletPrefix))?palletPrefix+lbl:lbl):String(p.palletNo);
+      var samples=(p.rows||[]).map(function(row,idx){
+        var readings=[];
+        var defs=row.defects||{};
+        Object.keys(defs).forEach(function(dk){
+          var val=parseFloat(defs[dk])||0;
+          if(val>0) readings.push({defect_key:dk,value:val});
+        });
+        return {
+          sample_number:idx+1,
+          time:row.time||'00:00',
+          size:row.size||null,
+          carton_weight:row.cartonWt||null,
+          brix:row.brix||null,
+          brix_v2:((newBatch.varietyType||'')==='mixed'&&row.brixV2)?row.brixV2:null,
+          sample_result:row.pass===true?'true':row.pass===false?'false':null,
+          notes:row.notes||null,
+          op_date:row.opDate||null,
+          sample_size:row.sampleSize||null,
+          extra_fields:row.extraFields||{},
+          sample_variety_id:(newBatch.varietyType||'')==='mixed'?null:((config&&config.varietiesIdMap&&row.sampleVariety&&config.varietiesIdMap[row.sampleVariety])||null),
+          sample_farm_id:(row.extraFields&&row.extraFields.sampleFarmSession&&config&&config.farmsIdMap)?(config.farmsIdMap[row.extraFields.sampleFarmSession]||null):null,
+          sample_carton_company:(row.extraFields&&row.extraFields.sampleCartonCompany)||null,
+          defect_readings:readings
+        };
+      });
+      var pr={pallet_number:palletNumber,samples:samples};
+      if(p.palletContainer) pr.container_number=p.palletContainer;
+      if(p.palletTraceCodes&&p.palletTraceCodes.length) pr.trace_codes=p.palletTraceCodes;
+      if(p.actualTraceCode) pr.actual_trace_code=p.actualTraceCode;
+      if(p.palletCartonCompany) pr.carton_company=p.palletCartonCompany;
+      return pr;
+    });
+    /* De-dup pallets by pallet_number (keep last), mirroring legacy behavior */
+    var palMap={}; pallets.forEach(function(pr){palMap[pr.pallet_number]=pr;});
+    pallets=Object.keys(palMap).map(function(k){return palMap[k];});
+    /* Sticker checks */
+    var stickerChecks=[];
+    if(newBatch.stickerChecks){
+      stickerChecks=Object.keys(newBatch.stickerChecks).map(function(k){return {field_key:k,confirmed:!!newBatch.stickerChecks[k]};});
+    }
+    /* Clearance */
+    var clearanceLabels={c0:'Product condition',c1:'Labelling',c2:'Packaging',c3:'Documentation'};
+    var clearance=Object.keys(newBatch.clearance||{}).map(function(k,idx){
+      return {item_index:idx,item_label:clearanceLabels[k]||k,status:newBatch.clearance[k]||'Compliant'};
+    });
+    return {inspection:header,pallets:pallets,sticker_checks:stickerChecks,clearance:clearance};
+  }
+  /* Build an accurate save-failure message. A response-level error (res.error) means the
+     SERVER answered with a rejection — this is NOT a connectivity problem, so we must not
+     tell the inspector to check their wifi (they'd retry forever, as happens with a
+     duplicate-key/constraint error). Genuine network failures land in .catch() instead and
+     keep their "check your connection" wording. */
+  function mangoServerErrMsg(rawMsg, isEditMode){
+    var m=(rawMsg||'').toLowerCase();
+    var noun=isEditMode?'your changes are':'your data is';
+    if(m.indexOf('duplicate key')>=0||m.indexOf('already exists')>=0){
+      return 'RETRY:Save was blocked by a record conflict on the server \u2014 '+noun+' still here. Please contact support before retrying.';
+    }
+    return 'RETRY:Save didn\u2019t go through (server error) \u2014 '+noun+' still here. Please try again, and tell support if it keeps happening.';
+  }
   function addBatch(newBatch, onDone){
+    /* Idempotency guard: the same newBatch object must never dispatch twice.
+       Replayed dispatches (observed as duplicate identical inserts seconds
+       apart) are ignored — the original dispatch's callback owns the UX. */
+    if(newBatch&&newBatch._dispatched){console.warn('[DalOS] Duplicate addBatch dispatch ignored:',newBatch.id);return;}
+    /* Re-send throttle: block any dispatch for the same inspection id that arrives
+       within 3s of the previous one. A human tapping Save again is always slower
+       than this; a runaway automatic re-send is much faster, so this stops the loop
+       at source without ever blocking a legitimate retry. Skipped for brand-new
+       inspections with no stable id yet. */
+    if(newBatch&&newBatch.id){
+      var _now=Date.now();
+      var _prev=lastDispatchRef.current[newBatch.id]||0;
+      if(_now-_prev<3000){console.warn('[DalOS] Rapid re-dispatch throttled for',newBatch.id,'(',(_now-_prev),'ms since last)');return;}
+      lastDispatchRef.current[newBatch.id]=_now;
+    }
+    if(newBatch) newBatch._dispatched=true;
     var isEditMode=batches.some(function(b){return b.id===newBatch.id;});
     supabase.auth.getUser().then(function(userRes){
       var userId=userRes.data&&userRes.data.user?userRes.data.user.id:null;
       var seasonId=config.trueActiveSeasonId||config.activeSeasonId||null;
+      /* ── ATOMIC MANGO NEW-SAVE (shaky-network safe) ──────────────────────
+         For a brand-new mango inspection, send the ENTIRE inspection in ONE
+         transactional RPC (save_mango_inspection_full). The server writes header
+         + pallets + samples + defects + checklists all-or-nothing, so a dropped
+         hotspot connection can never leave a partial record. Edit-mode and other
+         products fall through to the existing hardened path below. */
+      if(!isEditMode && (newBatch.crop||'').toLowerCase()==='mango'){
+        try{
+          var mp=buildMangoSavePayload(newBatch, userId, seasonId);
+          return supabase.rpc('save_mango_inspection_full',{payload:mp}).then(function(res){
+            if(res.error){
+              console.error('[DalOS] Atomic mango save failed:',res.error.message);
+              /* Recoverable: nothing was written (transaction rolled back). Return the
+                 inspector to their filled form to retry — no data lost. The message is
+                 classified so a server/DB rejection is not mislabelled as a network fault. */
+              if(onDone){onDone(mangoServerErrMsg(res.error.message,false));onDone=null;}
+              return {__handled:true};
+            }
+            var newRealId=res.data&&res.data.id;
+            console.log('[DalOS] Atomic mango save OK:',newRealId,res.data);
+            if(onDone){onDone(null,newRealId);onDone=null;}
+            /* Refresh listing aggregates for the new row */
+            try{ if(typeof refreshBatchesById==='function'&&newRealId) setTimeout(function(){refreshBatchesById([newRealId]);},1200); }catch(e){}
+            return {__handled:true};
+          }).catch(function(e){
+            console.error('[DalOS] Atomic mango save threw:',e&&e.message);
+            if(onDone){onDone('RETRY:Save didn\u2019t go through \u2014 your data is still here. Check your connection and tap Save again.');onDone=null;}
+            return {__handled:true};
+          });
+        }catch(e){
+          console.error('[DalOS] Failed to build mango payload, falling back to legacy path:',e&&e.message);
+          /* fall through to legacy path below */
+        }
+      }
+      /* ── ATOMIC MANGO EDIT (shaky-network safe) ──────────────────────────
+         Editing an existing mango inspection also goes through one transactional
+         RPC (edit_mango_inspection_full): header update under optimistic lock,
+         then full child replace, all-or-nothing. A dropped connection can't leave
+         a half-edited record, and a stale lock is surfaced as CONFLICT. */
+      if(isEditMode && (newBatch.crop||'').toLowerCase()==='mango'){
+        try{
+          var mep=buildMangoSavePayload(newBatch, userId, seasonId, true, newBatch.id);
+          return supabase.rpc('edit_mango_inspection_full',{payload:mep}).then(function(res){
+            if(res.error){
+              var msg=res.error.message||'';
+              if(msg.indexOf('CONFLICT')>=0){
+                console.warn('[DalOS] Atomic mango edit conflict:',msg);
+                if(onDone){onDone('CONFLICT',newBatch.id);onDone=null;}
+                return {__handled:true};
+              }
+              console.error('[DalOS] Atomic mango edit failed:',msg);
+              if(onDone){onDone(mangoServerErrMsg(msg,true));onDone=null;}
+              return {__handled:true};
+            }
+            var eid=(res.data&&res.data.id)||newBatch.id;
+            console.log('[DalOS] Atomic mango edit OK:',eid,res.data);
+            if(onDone){onDone(null,eid);onDone=null;}
+            try{ if(typeof refreshBatchesById==='function') setTimeout(function(){refreshBatchesById([eid]);},1200); }catch(e){}
+            return {__handled:true};
+          }).catch(function(e){
+            console.error('[DalOS] Atomic mango edit threw:',e&&e.message);
+            if(onDone){onDone('RETRY:Save didn\u2019t go through \u2014 your changes are still here. Check your connection and tap Save again.');onDone=null;}
+            return {__handled:true};
+          });
+        }catch(e){
+          console.error('[DalOS] Failed to build mango edit payload, falling back to legacy path:',e&&e.message);
+          /* fall through to legacy edit path */
+        }
+      }
       if(isEditMode){
         return Promise.resolve({realId:newBatch.id,userId:userId,seasonId:seasonId});
       }
@@ -14847,6 +15272,7 @@ function App(){
         return {realId: idRes.data, userId: userId, seasonId: seasonId};
       });
     }).then(function(ctx){
+      if(ctx&&ctx.__handled) return; /* atomic mango save already completed */
       var realId=ctx.realId;
       /* Parallel array to sampleRows — maps sampleRows[i] defects so we can correctly
          assign defect readings to savedSamples[i] after insert.
@@ -14995,13 +15421,13 @@ function App(){
       if(isEditMode){
         /* ── Grapes: update pallet_number + container_number for each pallet ── */
         var isGrapesEdit=(newBatch.crop||'').toLowerCase()==='grapes';
-        if(isGrapesEdit){
+        if(isGrapesEdit||(newBatch&&(newBatch.crop||'').toLowerCase()==='mango')){
           var palletUpdatePromises=palletsData.map(function(p){
             var palletId=p.palletId;
             if(!palletId||typeof palletId==='number') return Promise.resolve(); /* skip temp numeric IDs */
             var palletPfx=(newBatch.palletPrefix)||'';
             var rawLabel=p.palletLabel&&p.palletLabel.trim()?p.palletLabel.trim():String(p.palletNo);
-            var palletUpdate={pallet_number:(palletPfx&&!rawLabel.startsWith(palletPfx))?palletPfx+rawLabel:rawLabel};
+            var palletUpdate={pallet_number:((isGrapesEdit||(newBatch&&(newBatch.crop||'').toLowerCase()==='mango'))&&palletPfx&&!rawLabel.startsWith(palletPfx))?palletPfx+rawLabel:rawLabel};
             if(p.palletContainer) palletUpdate.container_number=p.palletContainer;
             palletUpdate.trace_codes=p.palletTraceCodes||[];
             if(p.actualTraceCode!==undefined) palletUpdate.actual_trace_code=p.actualTraceCode||null;
@@ -15121,18 +15547,19 @@ function App(){
               /* Mirror line ~9044 prefix logic so edit-mode pallet labels match new-inspection format */
               var lblE=(p.palletLabel||'').trim();
               var palletNumE;
-              if(isCropGrapesEdit){
+              var _editUseLabel=(isCropGrapesEdit||(newBatch&&(newBatch.crop||'').toLowerCase()==='mango'));
+              if(_editUseLabel){
                 if(lblE){
                   palletNumE=(palletPrefixForEdit&&!lblE.startsWith(palletPrefixForEdit))?palletPrefixForEdit+lblE:lblE;
                 } else {
                   palletNumE=String(p.palletNo);
                 }
               } else {
-                palletNumE=p.palletNo;
+                palletNumE=String(p.palletNo);
               }
               var pr2={inspection_id:realId,pallet_number:palletNumE,actual_trace_code:p.actualTraceCode||null};
-              if(isCropGrapesEdit&&p.palletTraceCodes&&p.palletTraceCodes.length) pr2.trace_codes=p.palletTraceCodes;
-              if(isCropGrapesEdit&&p.palletContainer) pr2.container_number=p.palletContainer;
+              if((isCropGrapesEdit||(newBatch&&(newBatch.crop||'').toLowerCase()==='mango'))&&p.palletTraceCodes&&p.palletTraceCodes.length) pr2.trace_codes=p.palletTraceCodes;
+              if((isCropGrapesEdit||(newBatch&&(newBatch.crop||'').toLowerCase()==='mango'))&&p.palletContainer) pr2.container_number=p.palletContainer;
               if(p.palletCartonCompany) pr2.carton_company=p.palletCartonCompany;
               newPalletObjs.push({pallet:p,row:pr2});
             }
@@ -15181,17 +15608,18 @@ function App(){
               /* Compose the same pallet_number we used at insert time (above) — without this,
                  the find returns undefined and sample rows get silently dropped */
               var lblF=(item.pallet.palletLabel||'').trim();
+              var _useLabelEditMatch=(isCropGrapesEdit||(newBatch&&(newBatch.crop||'').toLowerCase()==='mango'));
               var expectedF;
-              if(isCropGrapesEdit){
+              if(_useLabelEditMatch){
                 if(lblF){
                   expectedF=(palletPrefixForEdit&&!lblF.startsWith(palletPrefixForEdit))?palletPrefixForEdit+lblF:lblF;
                 } else {
                   expectedF=String(item.pallet.palletNo);
                 }
               } else {
-                expectedF=item.pallet.palletNo;
+                expectedF=String(item.pallet.palletNo);
               }
-              var savedPallet=pr.data.find(function(sp){return sp.pallet_number===expectedF;});
+              var savedPallet=pr.data.find(function(sp){return String(sp.pallet_number)===String(expectedF);});
               if(!savedPallet){
                 console.warn('[DalOS] Edit-mode: could not match saved pallet — sample rows dropped',{palletLabel:item.pallet.palletLabel,palletNo:item.pallet.palletNo,expected:expectedF,available:pr.data.map(function(sp){return sp.pallet_number;})});
                 return;
@@ -15261,9 +15689,9 @@ function App(){
       var isCropGrapes=(newBatch.crop||'').toLowerCase()==='grapes';
       var palletRows=palletsData.map(function(p){
         var palletPrefix=(newBatch.palletPrefix)||'';
-        var row={inspection_id:realId, pallet_number:isCropGrapes?(p.palletLabel&&p.palletLabel.trim()?(palletPrefix&&!p.palletLabel.trim().startsWith(palletPrefix)?palletPrefix+p.palletLabel.trim():p.palletLabel.trim()):String(p.palletNo)):p.palletNo, actual_trace_code:p.actualTraceCode||null};
-        if(isCropGrapes&&p.palletContainer) row.container_number=p.palletContainer;
-        if(isCropGrapes&&p.palletTraceCodes&&p.palletTraceCodes.length) row.trace_codes=p.palletTraceCodes;
+        var _useLabelPN=(isCropGrapes||(newBatch.crop||'').toLowerCase()==='mango'); var row={inspection_id:realId, pallet_number:_useLabelPN?(p.palletLabel&&p.palletLabel.trim()?(palletPrefix&&!p.palletLabel.trim().startsWith(palletPrefix)?palletPrefix+p.palletLabel.trim():p.palletLabel.trim()):String(p.palletNo)):String(p.palletNo), actual_trace_code:p.actualTraceCode||null};
+        if((isCropGrapes||(newBatch.crop||'').toLowerCase()==='mango')&&p.palletContainer) row.container_number=p.palletContainer;
+        if((isCropGrapes||(newBatch.crop||'').toLowerCase()==='mango')&&p.palletTraceCodes&&p.palletTraceCodes.length) row.trace_codes=p.palletTraceCodes;
         if(p.palletCartonCompany) row.carton_company=p.palletCartonCompany;
         return row;
       });
@@ -15290,12 +15718,18 @@ function App(){
       var palletsData=newBatch.pallets||[];
       sampleRows=[];
       var palletPrefixForMatch=(newBatch.palletPrefix)||'';
+      var _unmatchedPallets=0;
+      /* Expected sample-row total the form is holding — used to detect silent drops
+         before we declare success (see integrity guard below). */
+      var _expectedSampleTotal=palletsData.reduce(function(acc,pp){return acc+((pp.rows&&pp.rows.length)||0);},0);
       palletsData.forEach(function(p){
-        var isCropGrapesNew=(newBatch&&(newBatch.crop||'').toLowerCase()==='grapes');
-        /* Compose the same pallet_number string we used at insert time (line 9044),
-           otherwise the find returns undefined and sample rows silently get dropped. */
+        /* Must compose pallet_number EXACTLY as the insert did (line ~15386, _useLabelPN),
+           otherwise the find returns undefined and sample rows attach to the wrong pallet
+           (or get dropped). Mango uses labels too — matching this here fixes the
+           mango sample-misattribution bug. */
+        var _useLabelMatch=(newBatch&&((newBatch.crop||'').toLowerCase()==='grapes'||(newBatch.crop||'').toLowerCase()==='mango'));
         var expectedPalletNumber;
-        if(isCropGrapesNew){
+        if(_useLabelMatch){
           var lbl=(p.palletLabel||'').trim();
           if(lbl){
             expectedPalletNumber=(palletPrefixForMatch&&!lbl.startsWith(palletPrefixForMatch))?palletPrefixForMatch+lbl:lbl;
@@ -15303,11 +15737,12 @@ function App(){
             expectedPalletNumber=String(p.palletNo);
           }
         } else {
-          expectedPalletNumber=p.palletNo;
+          expectedPalletNumber=String(p.palletNo);
         }
-        var savedPallet=savedPallets.find(function(sp){return sp.pallet_number===expectedPalletNumber;});
+        var savedPallet=savedPallets.find(function(sp){return String(sp.pallet_number)===String(expectedPalletNumber);});
         if(!savedPallet){
           console.warn('[DalOS] Could not match saved pallet for label/no:',{palletLabel:p.palletLabel,palletNo:p.palletNo,expected:expectedPalletNumber,savedPalletNumbers:savedPallets.map(function(sp){return sp.pallet_number;})});
+          _unmatchedPallets++;
           return;
         }
         (p.rows||[]).forEach(function(row,idx){
@@ -15332,6 +15767,22 @@ function App(){
           _rowDefects.push(row.defects||{});
         });
       });
+      /* ── INTEGRITY GUARD ──────────────────────────────────────────────
+         If any pallet failed to match, or we assembled fewer sample rows than
+         the form is holding, DO NOT report success. Abort with a recoverable
+         error: the form state and the autosave draft are both still intact, so
+         the inspector lands back on the filled-in form and can simply tap Save
+         again — no data is lost. This closes the silent-drop hole behind the
+         MN-2026-0015 incident. */
+      if(_unmatchedPallets>0 || sampleRows.length<_expectedSampleTotal){
+        console.error('[DalOS] Sample integrity check failed — aborting before insert to protect data',{unmatchedPallets:_unmatchedPallets,assembled:sampleRows.length,expected:_expectedSampleTotal});
+        try{ if(typeof logError==='function') logError('sample_integrity_abort',{inspection:realId,unmatchedPallets:_unmatchedPallets,assembled:sampleRows.length,expected:_expectedSampleTotal}); }catch(e){}
+        /* Lock the session to the already-created inspection so the retry runs the
+           EDIT path (repairs this same row) instead of minting a duplicate shell. */
+        try{ if(realId) sGrpSession[1](realId); }catch(e){}
+        if(onDone){onDone('RETRY:Some samples weren\u2019t matched to their pallets, so nothing was saved yet \u2014 your data is still here. Please tap Save again. If this keeps happening, screenshot this message.');onDone=null;}
+        return;
+      }
       if(sampleRows.length===0){if(onDone){onDone(null,realId);onDone=null;}return;}
       return supabase.from('sample_rows').insert(sampleRows).select();
     }).then(function(sampleRes){
