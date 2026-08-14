@@ -1127,8 +1127,8 @@ function InspectionForm(props){
   var sGrpSession=useState(null);
   var grpSessionId=(function(){
     if(sGrpSession[0]) return sGrpSession[0]; /* locked session id — all crops */
+    if(batch&&batch.id) return batch.id; /* editing an existing inspection (any crop) — use its id (needed for citrus pallet move) */
     if(cropId!=='grapes') return '';
-    if(batch&&batch.id) return batch.id;
     var prod=(config.products||[]).find(function(p){return p.id==='grapes';})||{inspection_prefix:'GR'};
     var prefix=prod.inspection_prefix||'GR';
     var ph=(packhouse&&packhouse.initials)||'XX';
@@ -1262,6 +1262,8 @@ function InspectionForm(props){
         if(unassignedTC.length>0) errs.push('All trace codes must be assigned V1, V2 or Both in a mixed variety session');
       }
     }
+    /* Citrus pallet numbers are system-assigned ({inspection_id}-{n}) on save —
+       nothing to validate here (no typed label). */
     if(!variety.trim()) errs.push('Variety');
     if(!decision) errs.push('Decision \u2014 Accept or Reject must be selected');
     /* ── DUPLICATE PALLET LABEL BLOCK (session-scoped, all products) ──────────
@@ -2454,7 +2456,7 @@ function InspectionForm(props){
                   ce('span',{style:{fontSize:10,color:unitConfirmed.container?'#fff':'var(--amber)',lineHeight:1}},unitConfirmed.container?'\u2713':'\u2713')
                 )
               ),
-              ce('input',{className:'form-input',value:container,onChange:function(e){var newVal=e.target.value;var oldVal=container;setContainer(newVal);if(cropId==='grapes'||cropId==='mango'){setPallets(function(prev){return prev.map(function(p){if(!p.palletContainer||(oldVal&&p.palletContainer.toUpperCase()===oldVal.toUpperCase())){return Object.assign({},p,{palletContainer:newVal});}return p;});});}if(preFilled)confirmUnit('container');},placeholder:'e.g. AMCU 9327595',style:preFilled&&!unitConfirmed.container?{borderColor:'var(--amber)',boxShadow:'0 0 0 2px #e8c87a44'}:{}}),
+              ce('input',{className:'form-input',value:container,onChange:function(e){var newVal=e.target.value;var oldVal=container;setContainer(newVal);if(cropId==='grapes'||cropId==='mango'||cropId==='citrus'){setPallets(function(prev){return prev.map(function(p){if(!p.palletContainer||(oldVal&&p.palletContainer.toUpperCase()===oldVal.toUpperCase())){return Object.assign({},p,{palletContainer:newVal});}return p;});});}if(preFilled)confirmUnit('container');},placeholder:'e.g. AMCU 9327595',style:preFilled&&!unitConfirmed.container?{borderColor:'var(--amber)',boxShadow:'0 0 0 2px #e8c87a44'}:{}}),
               cropId==='mango'&&container.trim()&&(function(){var norm=container.trim().replace(/\s+/g,' ').toUpperCase();var dupe=(allBatches||[]).find(function(bb){return bb&&bb.id!==(batch&&batch.id)&&((bb.container||'').trim().replace(/\s+/g,' ').toUpperCase()===norm);});return dupe?ce('div',{style:{marginTop:5,fontSize:11,color:'#b06010',background:'#fff3e0',border:'1px solid #e8c87a',borderRadius:6,padding:'4px 8px'}},'\u26a0 Container already used in session '+dupe.id+(dupe.lot?' (LOT '+dupe.lot+')':'')+' \u2014 one container = one session.'):null;})()
             ),
             ce('div',{className:'form-field'},
@@ -2471,14 +2473,14 @@ function InspectionForm(props){
               ),
               farm==='__other__'&&ce('input',{className:'form-input',style:{marginTop:4},placeholder:'Farm name',onChange:function(e){setFarm(e.target.value);}})
             ),
-            /* Plot (grapes only) */
-            cropId==='grapes'&&ce('div',{className:'form-field'},
+            /* Plot (grapes + citrus + mango) */
+            (cropId==='grapes'||cropId==='citrus'||cropId==='mango')&&ce('div',{className:'form-field'},
               ce('label',{className:'form-label'},'Plot'),
               ce('input',{className:'form-input',value:plot,placeholder:'Plot no.',onChange:function(e){setPlot(e.target.value);}})
             )
           ),
           /* Farm 2 + Plot 2 — + button toggle */
-          cropId==='grapes'&&(!farm2
+          (cropId==='grapes'||cropId==='citrus'||cropId==='mango')&&(!farm2
             ?ce('div',{style:{marginBottom:10}},
                 ce('button',{className:'btn btn-sm',style:{background:'none',border:'1px dashed var(--border2)',color:'var(--text3)',fontSize:12},
                   onClick:function(){setFarm2('__selecting__');}
@@ -2506,7 +2508,7 @@ function InspectionForm(props){
               )
           ),
           /* Farm 3 — only shown when farm2 is filled */
-          cropId==='grapes'&&farm2&&farm2!=='__selecting__'&&(!farm3
+          (cropId==='grapes'||cropId==='citrus'||cropId==='mango')&&farm2&&farm2!=='__selecting__'&&(!farm3
             ?ce('div',{style:{marginBottom:10}},
                 ce('button',{className:'btn btn-sm',style:{background:'none',border:'1px dashed var(--border2)',color:'var(--text3)',fontSize:12},
                   onClick:function(){setFarm3('__selecting__');}
@@ -2534,7 +2536,7 @@ function InspectionForm(props){
               )
           ),
           /* Farm 4 — only shown when farm3 is filled */
-          cropId==='grapes'&&farm3&&farm3!=='__selecting__'&&(!farm4
+          (cropId==='grapes'||cropId==='citrus'||cropId==='mango')&&farm3&&farm3!=='__selecting__'&&(!farm4
             ?ce('div',{style:{marginBottom:10}},
                 ce('button',{className:'btn btn-sm',style:{background:'none',border:'1px dashed var(--border2)',color:'var(--text3)',fontSize:12},
                   onClick:function(){setFarm4('__selecting__');}
@@ -2562,7 +2564,7 @@ function InspectionForm(props){
               )
           ),
           /* Additional farms 5+ — unlimited, only when farm4 is filled */
-          cropId==='grapes'&&farm4&&farm4!=='__selecting__'&&ce('div',null,
+          (cropId==='grapes'||cropId==='citrus'||cropId==='mango')&&farm4&&farm4!=='__selecting__'&&ce('div',null,
             additionalFarms.map(function(af,aidx){
               return ce('div',{key:aidx,className:'grid4',style:{marginBottom:10}},
                 ce('div',{className:'form-field'},
@@ -2710,7 +2712,7 @@ function InspectionForm(props){
             )
           ),
           ce('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:10}},
-            cropId!=='grapes'&&ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Wax — التشميع'),ce('div',{className:'wax-options'},WAX_CODES.map(function(w){return ce('button',{key:w.code,className:'wax-btn'+(wax===w.code?' sel':''),onClick:function(){setWax(w.code);}},w.code);}))),
+            cropId!=='grapes'&&cropId!=='citrus'&&ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Wax — التشميع'),ce('div',{className:'wax-options'},WAX_CODES.map(function(w){return ce('button',{key:w.code,className:'wax-btn'+(wax===w.code?' sel':''),onClick:function(){setWax(w.code);}},w.code);}))),
             ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Packing'),ce('select',{className:'form-select',value:packing,onChange:function(e){setPacking(e.target.value);}},ce('option',{value:''},'— Select —'),['Ok','Not Ok'].map(function(v){return ce('option',{key:v,value:v},v);}))),
             ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Labelling & coding'),ce('select',{className:'form-select',value:labelling,onChange:function(e){setLabelling(e.target.value);}},ce('option',{value:''},'— Select —'),['Ok','Not Ok'].map(function(v){return ce('option',{key:v,value:v},v);})))
           )
@@ -2830,7 +2832,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
         onClick:addExtraLabel
       },'＋ Add extra label sticker'),
       /* TRACE CODES — grapes only: above pallets for per-pallet assignment */
-      (cropId==='grapes'||cropId==='mango')&&ce('div',{className:'card',style:{marginBottom:12},'data-field':'traceCodes'},
+      (cropId==='grapes'||cropId==='mango'||cropId==='citrus')&&ce('div',{className:'card',style:{marginBottom:12},'data-field':'traceCodes'},
         ce('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}},
           ce('div',{className:'section-title',style:{marginBottom:0}},
             ce('div',{className:'section-title-bar',style:{background:'#5a7ab0'}}),
@@ -2919,7 +2921,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
           /* Pallet header */
           ce('div',{style:{padding:'10px 16px',borderBottom:'1px solid var(--border)',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8,background:isActive?'var(--accent)08':'var(--bg2)',cursor:'pointer'},onClick:function(){setActivePalletIdx(pIdx);}},
             ce('div',{style:{display:'flex',alignItems:'center',gap:10,flex:1,minWidth:0}},
-              /* Grapes + Mango: pallet label input. Others: numbered badge */
+              /* Grapes + Mango: typed pallet label. Citrus + Pomegranate: system-assigned number (read-only). Others: numbered badge */
               (cropId==='grapes'||cropId==='mango')
               ?ce('div',{style:{display:'flex',flexDirection:'column',gap:3,flexShrink:0},'data-field':'palletLabel-'+pIdx,onClick:function(e){e.stopPropagation();}},
                   ce('div',{style:{fontSize:9,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:2}},'Pallet #'),
@@ -2936,11 +2938,17 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                     })
                   )
                 )
+              :(cropId==='citrus'||cropId==='pomegranate')
+              ?ce('div',{style:{display:'flex',flexDirection:'column',gap:3,flexShrink:0},onClick:function(e){e.stopPropagation();}},
+                  ce('div',{style:{fontSize:9,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:2}},'Pallet #'),
+                  ce('div',{style:{padding:'4px 10px',background:'var(--bg2)',border:'1px solid var(--border2)',borderRadius:4,fontFamily:'var(--font-mono)',fontSize:13,fontWeight:600,color:(typeof pallet.palletId==='string')?'var(--accent)':'var(--text3)',whiteSpace:'nowrap'}},
+                    (typeof pallet.palletId==='string'&&pallet.palletNo)?String(pallet.palletNo):String(pIdx+1))
+                )
               :ce('div',{style:{width:28,height:28,borderRadius:7,background:'var(--accent)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:700,color:'#fff',flexShrink:0}},pallet.palletNo),
               ce('div',{style:{minWidth:0,overflow:'hidden'}},
                 ce('div',{className:'section-title',style:{marginBottom:0,flexWrap:'nowrap',whiteSpace:'nowrap',overflow:'hidden'}},
                   ce('div',{className:'section-title-bar',style:{background:'#b03030',flexShrink:0}}),
-                  ce('span',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},(cropId==='grapes'||cropId==='mango')?('Pallet '+(pallet.palletLabel||('#'+pallet.palletNo))+' sample readings'):('Pallet '+pallet.palletNo+' sample readings')),
+                  ce('span',{style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},(cropId==='grapes'||cropId==='mango'||cropId==='citrus')?('Pallet '+(pallet.palletLabel||('#'+pallet.palletNo))+' sample readings'):('Pallet '+pallet.palletNo+' sample readings')),
                   ce('span',{style:{fontSize:11,color:'var(--text3)',fontWeight:400,textTransform:'none',letterSpacing:0,marginLeft:6,flexShrink:0,whiteSpace:'nowrap'}},pRows.length+' sample'+(pRows.length!==1?'s':''))
                 ),
                 ce('div',{style:{fontSize:11,color:pCrit?'var(--red)':pTotal>5?'var(--amber)':'var(--green)',fontFamily:'var(--font-mono)',fontWeight:600,marginTop:2}},'Avg total: '+pTotal.toFixed(2)+'%'+(pCrit?' · ⚠ Critical':''))
@@ -2948,7 +2956,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
             ),
             ce('div',{className:'pallet-header-actions',style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
               /* Grapes + Mango: per-pallet container field + Set button */
-              (cropId==='grapes'||cropId==='mango')&&ce('div',{style:{display:'flex',alignItems:'center',gap:6},onClick:function(e){e.stopPropagation();}},
+              (cropId==='grapes'||cropId==='mango'||cropId==='citrus')&&ce('div',{style:{display:'flex',alignItems:'center',gap:6},onClick:function(e){e.stopPropagation();}},
                 ce('div',{style:{fontSize:9,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',flexShrink:0}},'Container'),
                 ce('input',{className:'form-input',value:pallet.palletContainer||'',
                   onChange:function(i){return function(e){updatePalletContainer(i,e.target.value);};}(pIdx),
@@ -2986,7 +2994,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                   onClick:function(e){e.stopPropagation();addPalletSameLOT();}
                 },'+ Pallet')
               :ce('button',{className:'btn btn-sm',style:{background:'#eef4ff',border:'1px solid #a0b8e8',color:'#2a5aa0',fontWeight:500,flexShrink:0,whiteSpace:'nowrap',display:'inline-flex'},onClick:function(e){e.stopPropagation();if(isEdit){addPalletSameLOT();}else{setShowNP(true);}}},'+ Pallet'),
-              (cropId==='grapes'||(cropId==='mango'&&pallets.length>1))&&ce('button',{className:'btn btn-sm',
+              (cropId==='grapes'||cropId==='citrus'||cropId==='pomegranate'||(cropId==='mango'&&pallets.length>1))&&ce('button',{className:'btn btn-sm',
                 style:{background:'var(--bg2)',color:'var(--text2)',border:'1px solid var(--border2)',fontSize:11,flexShrink:0,opacity:animatingPalletId?.5:1,transition:'opacity .2s'},
                 disabled:!!animatingPalletId,
                 onClick:function(i,p){return function(e){e.stopPropagation();openMoveModal(i,p);};}(pIdx,pallet)
@@ -3002,7 +3010,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
             )
           ),
           /* Trace codes row — grapes only, sits between header and sample table */
-          (cropId==='grapes'||cropId==='mango')&&ce('div',{style:{padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg)',display:'flex',alignItems:'center',gap:10},onClick:function(e){e.stopPropagation();}},
+          (cropId==='grapes'||cropId==='mango'||cropId==='citrus')&&ce('div',{style:{padding:'8px 16px',borderBottom:'1px solid var(--border)',background:'var(--bg)',display:'flex',alignItems:'center',gap:10},onClick:function(e){e.stopPropagation();}},
             ce('div',{style:{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',flexShrink:0,minWidth:80}},'Trace Codes'),
             ce('div',{style:{display:'flex',flexWrap:'wrap',gap:5,flex:1}},
               (function(){
@@ -3060,7 +3068,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
             )
           ),
           /* Actual Traceability Code — collapsible, star icon, clean UX */
-          (cropId==='grapes'||cropId==='mango')&&ce('div',{style:{margin:'4px 0 6px',borderRadius:6,border:'1px solid '+(pallet.actualTraceCode?'var(--accent)':'var(--border2)'),overflow:'hidden'}},
+          (cropId==='grapes'||cropId==='mango'||cropId==='citrus')&&ce('div',{style:{margin:'4px 0 6px',borderRadius:6,border:'1px solid '+(pallet.actualTraceCode?'var(--accent)':'var(--border2)'),overflow:'hidden'}},
             ce('div',{
               style:{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',cursor:'pointer',background:pallet.showActualTrace?(pallet.actualTraceCode?'var(--green-bg)':'var(--bg2)'):'transparent',userSelect:'none'},
               onClick:function(pidx,cur){return function(){updatePalletField(pidx,'showActualTrace',!cur);};}(pIdx,pallet.showActualTrace)
@@ -3595,18 +3603,25 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
             :(function(){
               var secCols=defSections.length?defSections.map(function(){return '72px';}).join(' '):'72px';
               var isMangoTbl=cropId==='mango';
-              var gridTpl=(isMangoTbl?'26px ':'')+'90px 100px 70px 60px 60px 60px '+(isMangoTbl?'60px ':'')+secCols+' 1fr 54px '+(isMangoTbl?'':'22px ')+'22px';
-              var hdrLabels=(isMangoTbl?['']:[]).concat(['Time','Op. Date','Sample #','Size','Wt (kg)','Brix']).concat(isMangoTbl?['Firm']:[]).concat(defSections.map(function(s){return (s.section||s.name||'Defect').split(' ')[0];})).concat(isMangoTbl?['Notes','P/F','']:['Notes','P/F','▼','']);
-              return ce('div',{style:{minWidth:900}},
+              /* Citrus joins mango's leading S# expand column; Firm + the notes hover-popup stay mango-only */
+              var showExpandCol=(cropId==='mango'||cropId==='citrus');
+              /* Citrus + mango also get per-sample Farm + Plot columns (grapes-style, single variety —
+                 neither crop exposes the mixed-variety toggle, so no split V1/V2 pickers) */
+              var showFarmCol=(cropId==='citrus'||cropId==='mango');
+              /* Citrus wax moved from header to a per-sample column */
+              var showWaxCol=(cropId==='citrus');
+              var gridTpl=(showExpandCol?'26px ':'')+(showFarmCol?'104px 66px ':'')+'90px 100px 70px 60px 60px 60px '+(isMangoTbl?'60px ':'')+(showWaxCol?'70px ':'')+secCols+' 1fr 54px '+(showExpandCol?'':'22px ')+'22px';
+              var hdrLabels=(showExpandCol?['']:[]).concat(showFarmCol?['Farm','Plot']:[]).concat(['Time','Op. Date','Sample #','Size','Wt (kg)','Brix']).concat(isMangoTbl?['Firm']:[]).concat(showWaxCol?['Wax']:[]).concat(defSections.map(function(s){return (s.section||s.name||'Defect').split(' ')[0];})).concat(showExpandCol?['Notes','P/F','']:['Notes','P/F','▼','']);
+              return ce('div',{style:{minWidth:showFarmCol?1140:900}},
                 ce('div',{style:{display:'grid',gridTemplateColumns:gridTpl,gap:4,padding:'5px 14px',background:'var(--bg2)',borderBottom:'1px solid var(--border2)'}},
-                  hdrLabels.map(function(h,i){return ce('div',{key:i,style:{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.04em',textAlign:i>=(isMangoTbl?8:6)?'center':'left'}},h);})
+                  hdrLabels.map(function(h,i){return ce('div',{key:i,style:{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.04em',textAlign:i>=((showExpandCol?1:0)+(showFarmCol?2:0)+6+(isMangoTbl?1:0)+(showWaxCol?1:0))?'center':'left'}},h);})
                 ),
                 pRows.map(function(row,ri){
                   var rowCrit=defSections.some(function(sec){return sec.items.some(function(d){return d.sev==='Critical'&&(parseFloat(row.defects[d.key])||0)>0;});});
                   var isExp=expandedRow===row.id;
                   return ce('div',{key:row.id},
                     ce('div',{style:{display:'grid',gridTemplateColumns:gridTpl,gap:4,padding:'5px 14px',borderBottom:isExp?'none':'1px solid var(--border)',background:rowCrit?'#fff8f8':ri%2===0?'transparent':'rgba(0,0,0,.015)',alignItems:'center'}},
-                      isMangoTbl&&ce('div',{
+                      showExpandCol&&ce('div',{
                         onClick:function(id){return function(){setExpandedRow(expandedRow===id?null:id);};}(row.id),
                         title:isExp?'Hide defects':'Open defect entry (S'+(ri+1)+')',
                         style:{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:'pointer',userSelect:'none',alignSelf:'center'}
@@ -3614,13 +3629,48 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                         ce('span',{style:{fontSize:8,fontWeight:600,color:'var(--text3)',lineHeight:1,letterSpacing:'.02em'}},'S'+(ri+1)),
                         ce('div',{style:{width:20,height:20,borderRadius:4,background:isExp?'var(--accent)':'transparent',border:'1px solid '+(isExp?'var(--accent)':'var(--border2)'),display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,fontWeight:600,lineHeight:1,color:isExp?'#fff':'var(--text3)',transition:'background .15s,color .15s,border-color .15s'}},isExp?'−':'+')
                       ),
+                      showFarmCol&&ce('select',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:11,width:'100%',background:'var(--card)'},
+                        value:(row.extraFields||{}).sampleFarm||'',
+                        onChange:function(i,id,f1,p1,f2,p2,f3,p3,f4,p4){return function(e){
+                          var ef2=row.extraFields||{};
+                          var newFarm=e.target.value;
+                          var autoPlot=newFarm===f1?p1:(newFarm===f2?p2:(newFarm===f3?p3:(newFarm===f4?p4:'')));
+                          updateRowField(i,id,'extraFields',Object.assign({},ef2,{sampleFarm:newFarm,samplePlot:autoPlot}));
+                        };}(pIdx,row.id,farm,plot||'',farm2||'',plot2||'',farm3||'',plot3||'',farm4||'',plot4||'')},
+                        ce('option',{value:''},'—'),
+                        farm&&ce('option',{value:farm},farm),
+                        farm2&&farm2!=='__selecting__'&&farm2!=='__other__'&&ce('option',{value:farm2},farm2),
+                        farm3&&farm3!=='__selecting__'&&farm3!=='__other__'&&ce('option',{value:farm3},farm3),
+                        farm4&&farm4!=='__selecting__'&&farm4!=='__other__'&&ce('option',{value:farm4},farm4),
+                        additionalFarms.filter(function(af){return af.farmName;}).map(function(af,ai){return ce('option',{key:'af'+ai,value:af.farmName},af.farmName);})
+                      ),
+                      showFarmCol&&(function(){
+                        var ef=row.extraFields||{};
+                        var selFarm=ef.sampleFarm||'';
+                        var plotOpts=[];
+                        if(selFarm===farm&&plot) plotOpts.push(plot);
+                        if(selFarm===farm2&&plot2) plotOpts.push(plot2);
+                        if(selFarm===farm3&&plot3) plotOpts.push(plot3);
+                        if(selFarm===farm4&&plot4) plotOpts.push(plot4);
+                        additionalFarms.forEach(function(af){if(selFarm===af.farmName&&af.plot)plotOpts.push(af.plot);});
+                        if(!selFarm){if(plot)plotOpts.push(plot);if(plot2)plotOpts.push(plot2);if(plot3)plotOpts.push(plot3);if(plot4)plotOpts.push(plot4);additionalFarms.forEach(function(af){if(af.plot)plotOpts.push(af.plot);});}
+                        return ce('select',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:11,width:'100%',background:'var(--card)'},
+                          value:ef.samplePlot||'',
+                          onChange:function(i,id){return function(e){var ef2=row.extraFields||{};updateRowField(i,id,'extraFields',Object.assign({},ef2,{samplePlot:e.target.value}));};}(pIdx,row.id)},
+                          ce('option',{value:''},'—'),
+                          plotOpts.map(function(p){return ce('option',{key:p,value:p},p);})
+                        );
+                      })(),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',minWidth:84,background:'var(--card)'},type:'time',value:row.time,onChange:function(i,id){return function(e){updateRowField(i,id,'time',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',background:'var(--card)'},type:'date',value:row.opDate||'',onChange:function(i,id){return function(e){updateRowField(i,id,'opDate',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',min:'0',step:'1',value:row.sampleSize||'',placeholder:'#',onChange:function(i,id){return function(e){updateRowField(i,id,'sampleSize',e.target.value);};}(pIdx,row.id)}),
-                      ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',min:'0',step:'1',value:row.size||'',placeholder:'size',onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)}),
+                      cropId==='citrus'
+                        ?ce('select',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',background:'var(--card)'},value:row.size||'',onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)},[ce('option',{key:'_none',value:''},'—')].concat(CITRUS_SIZES.map(function(s){return ce('option',{key:s,value:s},s);})))
+                        :ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',min:'0',step:'1',value:row.size||'',placeholder:'size',onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',step:'0.1',value:row.cartonWt,placeholder:'kg',onChange:function(i,id){return function(e){updateRowField(i,id,'cartonWt',e.target.value);};}(pIdx,row.id)}),
                       ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',step:'0.1',value:row.brix,placeholder:'°Bx',onChange:function(i,id){return function(e){updateRowField(i,id,'brix',e.target.value);};}(pIdx,row.id)}),
                       isMangoTbl&&ce('input',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:12,fontFamily:'var(--font-mono)',width:'100%',textAlign:'right',background:'var(--card)'},type:'number',step:'0.1',min:'0',value:(row.extraFields||{}).firmness||'',placeholder:'firm',onChange:function(i,id){return function(e){updateRowExtra(i,id,'firmness',e.target.value);};}(pIdx,row.id)}),
+                      showWaxCol&&ce('select',{style:{padding:'4px 5px',border:'1px solid var(--border2)',borderRadius:4,fontSize:11,width:'100%',background:'var(--card)'},value:(row.extraFields||{}).sampleWax||'',onChange:function(i,id){return function(e){var ef2=row.extraFields||{};updateRowField(i,id,'extraFields',Object.assign({},ef2,{sampleWax:e.target.value}));};}(pIdx,row.id)},[ce('option',{key:'_none',value:''},'—')].concat(WAX_CODES.map(function(w){return ce('option',{key:w.code,value:w.code},w.code);}))),
                       defSections.map(function(sec){
                         var secTotal=sec.items.reduce(function(sum,d){return sum+(parseFloat(row.defects[d.key])||0);},0);
                         var secOver=sec.items.some(function(d){var thresh=thresholds[d.key]!==undefined?thresholds[d.key]:d.thresh;return thresh===0?(parseFloat(row.defects[d.key])||0)>0:(parseFloat(row.defects[d.key])||0)>thresh;});
@@ -3668,7 +3718,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                         ce('button',{style:{padding:'2px 4px',fontSize:9,fontWeight:700,borderRadius:3,border:'1px solid '+(row.pass===true?'var(--green)':'var(--border2)'),background:row.pass===true?'var(--green)':'transparent',color:row.pass===true?'#fff':'var(--text3)',cursor:'pointer',lineHeight:1.2},onClick:function(i,id){return function(){updateRowField(i,id,'pass',true);};}(pIdx,row.id)},'PASS'),
                         ce('button',{style:{padding:'2px 4px',fontSize:9,fontWeight:700,borderRadius:3,border:'1px solid '+(row.pass===false?'var(--red)':'var(--border2)'),background:row.pass===false?'var(--red)':'transparent',color:row.pass===false?'#fff':'var(--text3)',cursor:'pointer',lineHeight:1.2},onClick:function(i,id){return function(){updateRowField(i,id,'pass',false);};}(pIdx,row.id)},'FAIL')
                       ),
-                      !isMangoTbl&&ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--accent)',fontSize:13,padding:0,lineHeight:1,fontWeight:600},onClick:function(){setExpandedRow(isExp?null:row.id);}},isExp?'▲':'▼'),
+                      !showExpandCol&&ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--accent)',fontSize:13,padding:0,lineHeight:1,fontWeight:600},onClick:function(){setExpandedRow(isExp?null:row.id);}},isExp?'▲':'▼'),
                       ce('button',{style:{background:'none',border:'none',cursor:'pointer',color:'var(--text3)',fontSize:14,padding:0,lineHeight:1},title:'Remove row',onClick:function(i,id){return function(){removeRow(i,id);};}(pIdx,row.id)},pRows.length>1?'\u00d7':'')
                     ),
                     isExp&&ce('div',{style:{background:'#f8f4f0',borderBottom:'1px solid var(--border)',padding:'10px 14px'}},
@@ -3708,10 +3758,14 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                 }),
                 /* Pallet averages footer */
                 ce('div',{style:{display:'grid',gridTemplateColumns:gridTpl,gap:4,padding:'7px 14px',background:'var(--bg2)',borderTop:'2px solid var(--border2)',alignItems:'center'}},
+                  cropId==='citrus'&&ce('div',null),
+                  showFarmCol&&ce('div',null),
+                  showFarmCol&&ce('div',null),
                   ce('div',{style:{fontSize:10,fontWeight:600,color:'var(--text3)'}},'P'+pallet.palletNo+' avg'),
                   ce('div',null),ce('div',null),ce('div',null),
                   ce('div',{style:{fontFamily:'var(--font-mono)',fontSize:11,textAlign:'right',color:'var(--text2)'}},(pAvgField('cartonWt')||'—')),
                   ce('div',{style:{fontFamily:'var(--font-mono)',fontSize:11,textAlign:'right',color:'var(--text2)'}},(pAvgField('brix')||'—')),
+                  showWaxCol&&ce('div',null),
                   defSections.map(function(sec){
                     var secAvg=sec.items.reduce(function(sum,d){return sum+(pAvgDef(d.key)||0);},0);
                     return ce('div',{key:sec.section,style:{fontFamily:'var(--font-mono)',fontSize:11,textAlign:'center',color:secAvg>0?'var(--amber)':'var(--text3)'}},secAvg>0?secAvg.toFixed(1):'—');
@@ -4012,13 +4066,48 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                     )
                   )
                 : ce('div',{className:'sample-card-grid',style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,padding:'10px 12px',borderBottom:'1px solid var(--border)'}},
+                    cropId==='citrus'&&ce('div',null,
+                      ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Farm'),
+                      ce('select',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:14,background:'var(--card)',minHeight:40},
+                        value:(row.extraFields||{}).sampleFarm||'',
+                        onChange:function(i,id,f1,p1,f2,p2,f3,p3,f4,p4){return function(e){
+                          var ef2=row.extraFields||{};var newFarm=e.target.value;
+                          var autoPlot=newFarm===f1?p1:(newFarm===f2?p2:(newFarm===f3?p3:(newFarm===f4?p4:'')));
+                          updateRowField(i,id,'extraFields',Object.assign({},ef2,{sampleFarm:newFarm,samplePlot:autoPlot}));
+                        };}(pIdx,row.id,farm,plot||'',farm2||'',plot2||'',farm3||'',plot3||'',farm4||'',plot4||'')},
+                        ce('option',{value:''},'—'),
+                        farm&&ce('option',{value:farm},farm),
+                        farm2&&farm2!=='__selecting__'&&farm2!=='__other__'&&ce('option',{value:farm2},farm2),
+                        farm3&&farm3!=='__selecting__'&&farm3!=='__other__'&&ce('option',{value:farm3},farm3),
+                        farm4&&farm4!=='__selecting__'&&farm4!=='__other__'&&ce('option',{value:farm4},farm4),
+                        additionalFarms.filter(function(af){return af.farmName;}).map(function(af,ai){return ce('option',{key:'af'+ai,value:af.farmName},af.farmName);})
+                      )
+                    ),
+                    cropId==='citrus'&&(function(){
+                      var ef=row.extraFields||{};var selFarm=ef.sampleFarm||'';var plotOpts=[];
+                      if(selFarm===farm&&plot) plotOpts.push(plot);
+                      if(selFarm===farm2&&plot2) plotOpts.push(plot2);
+                      if(selFarm===farm3&&plot3) plotOpts.push(plot3);
+                      if(selFarm===farm4&&plot4) plotOpts.push(plot4);
+                      additionalFarms.forEach(function(af){if(selFarm===af.farmName&&af.plot)plotOpts.push(af.plot);});
+                      if(!selFarm){if(plot)plotOpts.push(plot);if(plot2)plotOpts.push(plot2);if(plot3)plotOpts.push(plot3);if(plot4)plotOpts.push(plot4);additionalFarms.forEach(function(af){if(af.plot)plotOpts.push(af.plot);});}
+                      return ce('div',null,
+                        ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Plot'),
+                        ce('select',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:14,background:'var(--card)',minHeight:40},
+                          value:ef.samplePlot||'',
+                          onChange:function(i,id){return function(e){var ef2=row.extraFields||{};updateRowField(i,id,'extraFields',Object.assign({},ef2,{samplePlot:e.target.value}));};}(pIdx,row.id)},
+                          ce('option',{value:''},'—'),
+                          plotOpts.map(function(p){return ce('option',{key:p,value:p},p);})
+                        )
+                      );
+                    })(),
                     ce('div',null,
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Time'),
                       ce('input',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,fontFamily:'var(--font-mono)',background:'var(--card)',minHeight:40},type:'time',value:row.time,onChange:function(i,id){return function(e){updateRowField(i,id,'time',e.target.value);};}(pIdx,row.id)})
                     ),
                     ce('div',null,
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Size'),
-                      cropId==='mango'?ce('input',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,fontFamily:'var(--font-mono)',textAlign:'right',background:'var(--card)',minHeight:40},type:'number',min:'0',step:'1',value:row.size||'',placeholder:'count',onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)}):ce('select',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,background:'var(--card)',minHeight:40},value:row.size,onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)},CITRUS_SIZES.map(function(s){return ce('option',{key:s,value:s},s);}))
+                      cropId==='citrus'?ce('select',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,background:'var(--card)',minHeight:40},value:row.size||'',onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)},[ce('option',{key:'_none',value:''},'—')].concat(CITRUS_SIZES.map(function(s){return ce('option',{key:s,value:s},s);}))):ce('input',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,fontFamily:'var(--font-mono)',textAlign:'right',background:'var(--card)',minHeight:40},type:'number',min:'0',step:'1',value:row.size||'',placeholder:'count',onChange:function(i,id){return function(e){updateRowField(i,id,'size',e.target.value);};}(pIdx,row.id)})
                     ),
                     ce('div',null,
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Wt kg'),
@@ -4027,6 +4116,10 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                     ce('div',null,
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Brix °'),
                       ce('input',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:15,fontFamily:'var(--font-mono)',textAlign:'right',background:'var(--card)',minHeight:40},type:'number',step:'0.1',value:row.brix,placeholder:'°Bx',onChange:function(i,id){return function(e){updateRowField(i,id,'brix',e.target.value);};}(pIdx,row.id)})
+                    ),
+                    cropId==='citrus'&&ce('div',null,
+                      ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Wax'),
+                      ce('select',{style:{width:'100%',padding:'8px 10px',border:'1px solid var(--border2)',borderRadius:6,fontSize:14,background:'var(--card)',minHeight:40},value:(row.extraFields||{}).sampleWax||'',onChange:function(i,id){return function(e){var ef2=row.extraFields||{};updateRowField(i,id,'extraFields',Object.assign({},ef2,{sampleWax:e.target.value}));};}(pIdx,row.id)},[ce('option',{key:'_none',value:''},'—')].concat(WAX_CODES.map(function(w){return ce('option',{key:w.code,value:w.code},w.code);})))
                     ),
                     cropId==='mango'&&ce('div',null,
                       ce('div',{style:{fontSize:10,color:'var(--text3)',fontWeight:600,textTransform:'uppercase',marginBottom:4}},'Firmness'),
@@ -4164,8 +4257,8 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
       ),
       /* TRACE & CLEARANCE */
       ce('div',{className:'card',style:{marginBottom:12}},
-        ce('div',{className:'section-title'},ce('div',{className:'section-title-bar',style:{background:'#5a7ab0'}}),(cropId==='grapes'||cropId==='mango')?'Line clearance':'Traceability & line clearance'),
-        cropId!=='grapes'&&cropId!=='mango'&&ce('div',{className:'form-field',style:{marginBottom:12}},
+        ce('div',{className:'section-title'},ce('div',{className:'section-title-bar',style:{background:'#5a7ab0'}}),(cropId==='grapes'||cropId==='mango'||cropId==='citrus')?'Line clearance':'Traceability & line clearance'),
+        cropId!=='grapes'&&cropId!=='mango'&&cropId!=='citrus'&&ce('div',{className:'form-field',style:{marginBottom:12}},
           ce('label',{className:'form-label'},'Trace codes'),
           traceCodes.map(function(tc,ti){
             return ce('div',{key:ti,style:{display:'flex',gap:6,marginBottom:6,alignItems:'center'}},
@@ -5052,7 +5145,7 @@ function FGView(props){
         tabs.map(function(t){return ce('div',{key:t,className:'tab'+(filter===t?' active':''),onClick:function(){setFilter(t);}},t,t!=='All'&&ce('span',{style:{marginLeft:5,background:t==='Accepted'?'#e8f5ec':t==='Rejected'?'#fdecea':'#fff3e0',color:t==='Accepted'?'#1e6b3a':t==='Rejected'?'#b01010':'#b06010',padding:'1px 5px',borderRadius:8,fontSize:10}},seasonBatches.filter(function(b){return b.status===t;}).length));})
       ),
       ce('div',{style:{display:'flex',gap:8,alignItems:'center',marginLeft:16,flexShrink:0}},
-        cropId==='mango'&&ce('div',{id:'dalos-view-toggle',style:{display:'flex',border:'1px solid var(--border2)',borderRadius:7,overflow:'hidden',flexShrink:0}},
+        (cropId==='mango'||cropId==='citrus')&&ce('div',{id:'dalos-view-toggle',style:{display:'flex',border:'1px solid var(--border2)',borderRadius:7,overflow:'hidden',flexShrink:0}},
           [['lot','By Lot'],['container','By Container']].map(function(m){return ce('button',{key:m[0],onClick:function(mode){return function(){setGrpMode(mode);setCollapsedLots({});};}(m[0]),style:{padding:'5px 11px',fontSize:11,fontWeight:600,border:'none',cursor:'pointer',background:grpMode===m[0]?'var(--accent)':'var(--card)',color:grpMode===m[0]?'#fff':'var(--text3)'}},m[1]);})
         ),
         /* ── Intro step 1: announcement modal ── */
@@ -5204,9 +5297,9 @@ function FGView(props){
               )
             )):
             (function(){
-              var useContGroups=cropId==='grapes'||(cropId==='mango'&&grpMode==='container');
+              var useContGroups=cropId==='grapes'||((cropId==='mango'||cropId==='citrus')&&grpMode==='container');
               var mangoContLots={};
-              if(cropId==='mango'){rows.forEach(function(bb){var cc=getContainer(bb);if(!cc)return;var ll=bb.lot||'';if(!mangoContLots[cc])mangoContLots[cc]={};mangoContLots[cc][ll]=1;});}
+              if(cropId==='mango'||cropId==='citrus'){rows.forEach(function(bb){var cc=getContainer(bb);if(!cc)return;var ll=bb.lot||'';if(!mangoContLots[cc])mangoContLots[cc]={};mangoContLots[cc][ll]=1;});}
               var groups=useContGroups?buildContainerGroups(rows):buildLotGroups(rows);
               return groups.reduce(function(acc,grp){
                 var isGrapesGroup=useContGroups;
@@ -5237,7 +5330,7 @@ function FGView(props){
                       ce('span',{style:{fontSize:10,color:'rgba(255,255,255,.35)',userSelect:'none',width:12}},isCollapsed?'▶':'▼'),
                       hdrLabel,
                       ce('span',{style:{fontSize:11,color:'rgba(255,255,255,.35)',borderLeft:'1px solid rgba(255,255,255,.12)',paddingLeft:10}},units.length===1?'1 session':units.length+' sessions'),
-                      cropId==='mango'&&isGrapesGroup&&grp.contKey&&(function(){var ls={};units.forEach(function(u){ls[u.lot||'']=1;});var n=Object.keys(ls).length;return n>1?ce('span',{style:{fontSize:10,background:'rgba(253,230,138,.18)',color:'#fde68a',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(253,230,138,.3)',fontWeight:600}},n+' lots'):null;})(),
+                      (cropId==='mango'||cropId==='citrus')&&isGrapesGroup&&grp.contKey&&(function(){var ls={};units.forEach(function(u){ls[u.lot||'']=1;});var n=Object.keys(ls).length;return n>1?ce('span',{style:{fontSize:10,background:'rgba(253,230,138,.18)',color:'#fde68a',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(253,230,138,.3)',fontWeight:600}},n+' lots'):null;})(),
                       accUnits.length>0&&ce('span',{style:{fontSize:10,background:'rgba(110,231,183,.18)',color:'#6ee7b7',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(110,231,183,.25)'}},'✓ '+accUnits.length+' accepted'),
                       rejUnits.length>0&&ce('span',{style:{fontSize:10,background:'rgba(239,68,68,.22)',color:'#fca5a5',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(239,68,68,.3)'}},'✗ '+rejUnits.length+' rejected'),
                       escUnits.length>0&&ce('span',{style:{fontSize:10,background:'rgba(99,102,241,.3)',color:'#c7d2fe',borderRadius:10,padding:'1px 8px',border:'1px solid rgba(99,102,241,.4)',fontWeight:600}},'⬆ '+escUnits.length+' escalated')
@@ -5251,7 +5344,7 @@ function FGView(props){
                       ce('td',{style:{width:28,paddingLeft:14}},''),
                       ce('td',null,
                         ce('div',{style:{display:'flex',alignItems:'center',gap:6}},
-                          (cropId==='grapes'||cropId==='mango')&&ce('button',{
+                          (cropId==='grapes'||cropId==='mango'||cropId==='citrus')&&ce('button',{
                             className:'btn btn-sm',
                             style:{background:'var(--bg2)',border:'1px solid var(--border2)',color:'var(--text3)',padding:'2px 7px',display:'inline-flex',alignItems:'center',gap:4,flexShrink:0,borderRadius:5,fontFamily:'var(--font-mono)',fontSize:10,fontWeight:600},
                             title:'View pallets in this session',
@@ -5263,7 +5356,7 @@ function FGView(props){
                           cont
                             ? ce('div',null,
                                 ce('span',{style:{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--text)',fontWeight:500}},cont),
-                                cropId==='mango'&&!useContGroups&&mangoContLots[cont]&&Object.keys(mangoContLots[cont]).length>1&&ce('span',{title:'This container also carries another lot',style:{marginLeft:5,fontSize:9,background:'#fff3e0',color:'#b06010',border:'1px solid #e8c87a',borderRadius:8,padding:'0 5px',fontWeight:600,verticalAlign:'middle'}},'shared'),
+                                (cropId==='mango'||cropId==='citrus')&&!useContGroups&&mangoContLots[cont]&&Object.keys(mangoContLots[cont]).length>1&&ce('span',{title:'This container also carries another lot',style:{marginLeft:5,fontSize:9,background:'#fff3e0',color:'#b06010',border:'1px solid #e8c87a',borderRadius:8,padding:'0 5px',fontWeight:600,verticalAlign:'middle'}},'shared'),
                                 ce('div',{style:{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text3)',marginTop:1}},b.id)
                               )
                             : ce('div',null,
@@ -5425,7 +5518,7 @@ function FGView(props){
             ce('span',{style:{fontFamily:'var(--font-mono)',color:selB.totalDefect>10?'var(--red)':selB.totalDefect>5?'var(--amber)':'var(--green)'}},selB.totalDefect.toFixed(2)+'%')
           ),
           /* Pallets summary — grapes only */
-          (cropId==='grapes'||cropId==='mango')&&(function(){
+          (cropId==='grapes'||cropId==='mango'||cropId==='citrus')&&(function(){
             var bd=selBData[selB.id]||{};
             var pallets=bd.pallets||[];
             if(bd.loading) return ce('div',{style:{fontSize:11,color:'var(--text3)',padding:'4px 0'}},'Loading pallets...');
@@ -5611,7 +5704,7 @@ function FGView(props){
             ce('span',null,'Total defect'),
             ce('span',{style:{fontFamily:'var(--font-mono)',color:selB.totalDefect>10?'var(--red)':selB.totalDefect>5?'var(--amber)':'var(--green)'}},selB.totalDefect.toFixed(2)+'%')
           ),
-          (cropId==='grapes'||cropId==='mango')&&(function(){
+          (cropId==='grapes'||cropId==='mango'||cropId==='citrus')&&(function(){
             var bd=selBData[selB.id]||{};
             var pallets=bd.pallets||[];
             if(bd.loading) return null;
@@ -16045,6 +16138,16 @@ function App(){
     if(newBatch.stickerImg) header.sticker_image_url=newBatch.stickerImg;
     if(newBatch.extraLabels) header.extra_labels=newBatch.extraLabels;
     if(newBatch.farm) header.farm_id=(config.farmsIdMap&&config.farmsIdMap[newBatch.farm])||null;
+    /* Multi-farm header fields — shared by mango and citrus (citrus wraps this builder).
+       Crops without the multi-farm UI simply leave these undefined/empty. */
+    if(newBatch.plot!==undefined) header.plot=newBatch.plot||null;
+    if(newBatch.farm2) header.farm2_id=(config.farmsIdMap&&config.farmsIdMap[newBatch.farm2])||null;
+    if(newBatch.plot2!==undefined) header.plot2=newBatch.plot2||null;
+    if(newBatch.farm3) header.farm3_id=(config.farmsIdMap&&config.farmsIdMap[newBatch.farm3])||null;
+    if(newBatch.plot3!==undefined) header.plot3=newBatch.plot3||null;
+    if(newBatch.farm4) header.farm4_id=(config.farmsIdMap&&config.farmsIdMap[newBatch.farm4])||null;
+    if(newBatch.plot4!==undefined) header.plot4=newBatch.plot4||null;
+    header.additional_farms=(newBatch.additionalFarms||[]).map(function(af){return {farm_id:af.farmId||null,plot:af.plot||null};});
     if(newBatch.formOpenedAt instanceof Date){
       header.draft_started_at=newBatch.formOpenedAt.toISOString();
       header.completion_minutes=Math.max(0,Math.round((Date.now()-newBatch.formOpenedAt.getTime())/60000));
@@ -16099,6 +16202,36 @@ function App(){
       return {item_index:idx,item_label:clearanceLabels[k]||k,status:newBatch.clearance[k]||'Compliant'};
     });
     return {inspection:header,pallets:pallets,sticker_checks:stickerChecks,clearance:clearance};
+  }
+  /* Citrus payload = the generic mango builder + citrus-only pallet numbering.
+     The multi-farm header fields now live in buildMangoSavePayload (shared with mango);
+     per-sample farm/plot ride along in each sample's extra_fields
+     (sampleFarm/samplePlot), exactly like grapes. */
+  function buildCitrusSavePayload(newBatch, userId, seasonId, isEditFlag, editId){
+    var p=buildMangoSavePayload(newBatch, userId, seasonId, isEditFlag, editId);
+    /* Citrus pallet numbers are system-assigned ({inspection_id}-{n}) server-side.
+       Existing pallets keep their stored number (round-tripped via palletNo →
+       buildMango's pallet_number); NEW pallets (temp numeric palletId) send an
+       empty number so the RPC assigns the next sequential one. */
+    var _src=newBatch.pallets||[];
+    if((p.pallets||[]).length===_src.length){
+      p.pallets.forEach(function(pr,i){ if(_src[i]&&typeof _src[i].palletId==='number') pr.pallet_number=''; });
+    }
+    return p;
+  }
+  /* Pomegranate payload = the generic mango builder (pomegranate is single-farm /
+     mango-shaped) + the citrus-style pallet-number blanking so the server auto-assigns
+     {inspection_id}-{n}. Existing pallets keep their stored number (round-tripped via
+     palletNo → buildMango's pallet_number); NEW pallets (temp numeric palletId) send an
+     empty number. Pomegranate exposes no multi-farm UI, so the multi-farm header fields
+     inherited from buildMangoSavePayload stay empty/null. */
+  function buildPomegranateSavePayload(newBatch, userId, seasonId, isEditFlag, editId){
+    var p=buildMangoSavePayload(newBatch, userId, seasonId, isEditFlag, editId);
+    var _src=newBatch.pallets||[];
+    if((p.pallets||[]).length===_src.length){
+      p.pallets.forEach(function(pr,i){ if(_src[i]&&typeof _src[i].palletId==='number') pr.pallet_number=''; });
+    }
+    return p;
   }
   /* Build an accurate save-failure message. A response-level error (res.error) means the
      SERVER answered with a rejection — this is NOT a connectivity problem, so we must not
@@ -16200,6 +16333,130 @@ function App(){
           });
         }catch(e){
           console.error('[DalOS] Failed to build mango edit payload, falling back to legacy path:',e&&e.message);
+          /* fall through to legacy edit path */
+        }
+      }
+      /* ── ATOMIC CITRUS NEW-SAVE (shaky-network safe) ─────────────────────
+         Citrus joined the atomic path for the 2025/26 lemon season. Reuses the
+         (product-agnostic) buildMangoSavePayload — it derives product_id from
+         the batch and the clearance label map already matches citrus — and the
+         dedicated save_citrus_inspection_full RPC (product-guarded 'citrus'). */
+      if(!isEditMode && (newBatch.crop||'').toLowerCase()==='citrus'){
+        try{
+          var csp=buildCitrusSavePayload(newBatch, userId, seasonId);
+          return supabase.rpc('save_citrus_inspection_full',{payload:csp}).then(function(res){
+            if(res.error){
+              console.error('[DalOS] Atomic citrus save failed:',res.error.message);
+              if(onDone){onDone(mangoServerErrMsg(res.error.message,false));onDone=null;}
+              return {__handled:true};
+            }
+            var newRealId=res.data&&res.data.id;
+            console.log('[DalOS] Atomic citrus save OK:',newRealId,res.data);
+            if(onDone){onDone(null,newRealId);onDone=null;}
+            try{ if(typeof refreshBatchesById==='function'&&newRealId) setTimeout(function(){refreshBatchesById([newRealId]);},1200); }catch(e){}
+            return {__handled:true};
+          }).catch(function(e){
+            console.error('[DalOS] Atomic citrus save threw:',e&&e.message);
+            if(onDone){onDone('RETRY:Save didn’t go through — your data is still here. Check your connection and tap Save again.');onDone=null;}
+            return {__handled:true};
+          });
+        }catch(e){
+          console.error('[DalOS] Failed to build citrus payload, falling back to legacy path:',e&&e.message);
+          /* fall through to legacy path below */
+        }
+      }
+      /* ── ATOMIC CITRUS EDIT (shaky-network safe) ─────────────────────────
+         Header update under optimistic lock, then incremental child reconcile,
+         all-or-nothing; stale lock surfaces as CONFLICT. */
+      if(isEditMode && (newBatch.crop||'').toLowerCase()==='citrus'){
+        try{
+          var cep=buildCitrusSavePayload(newBatch, userId, seasonId, true, newBatch.id);
+          return supabase.rpc('edit_citrus_inspection_full',{payload:cep}).then(function(res){
+            if(res.error){
+              var msg=res.error.message||'';
+              if(msg.indexOf('CONFLICT')>=0){
+                console.warn('[DalOS] Atomic citrus edit conflict:',msg);
+                if(onDone){onDone('CONFLICT',newBatch.id);onDone=null;}
+                return {__handled:true};
+              }
+              console.error('[DalOS] Atomic citrus edit failed:',msg);
+              if(onDone){onDone(mangoServerErrMsg(msg,true));onDone=null;}
+              return {__handled:true};
+            }
+            var eid=(res.data&&res.data.id)||newBatch.id;
+            console.log('[DalOS] Atomic citrus edit OK:',eid,res.data);
+            if(onDone){onDone(null,eid);onDone=null;}
+            try{ if(typeof refreshBatchesById==='function') setTimeout(function(){refreshBatchesById([eid]);},1200); }catch(e){}
+            return {__handled:true};
+          }).catch(function(e){
+            console.error('[DalOS] Atomic citrus edit threw:',e&&e.message);
+            if(onDone){onDone('RETRY:Save didn’t go through — your changes are still here. Check your connection and tap Save again.');onDone=null;}
+            return {__handled:true};
+          });
+        }catch(e){
+          console.error('[DalOS] Failed to build citrus edit payload, falling back to legacy path:',e&&e.message);
+          /* fall through to legacy edit path */
+        }
+      }
+      /* ── ATOMIC POMEGRANATE NEW-SAVE (shaky-network safe) ────────────────
+         Pomegranate joined the atomic path for the 2025/26 season. Mango-shaped
+         (single-farm); reuses buildPomegranateSavePayload (the mango builder plus
+         citrus-style server-assigned pallet numbers) and the product-guarded
+         save_pomegranate_inspection_full RPC. */
+      if(!isEditMode && (newBatch.crop||'').toLowerCase()==='pomegranate'){
+        try{
+          var psp=buildPomegranateSavePayload(newBatch, userId, seasonId);
+          return supabase.rpc('save_pomegranate_inspection_full',{payload:psp}).then(function(res){
+            if(res.error){
+              console.error('[DalOS] Atomic pomegranate save failed:',res.error.message);
+              if(onDone){onDone(mangoServerErrMsg(res.error.message,false));onDone=null;}
+              return {__handled:true};
+            }
+            var newRealId=res.data&&res.data.id;
+            console.log('[DalOS] Atomic pomegranate save OK:',newRealId,res.data);
+            if(onDone){onDone(null,newRealId);onDone=null;}
+            try{ if(typeof refreshBatchesById==='function'&&newRealId) setTimeout(function(){refreshBatchesById([newRealId]);},1200); }catch(e){}
+            return {__handled:true};
+          }).catch(function(e){
+            console.error('[DalOS] Atomic pomegranate save threw:',e&&e.message);
+            if(onDone){onDone('RETRY:Save didn’t go through — your data is still here. Check your connection and tap Save again.');onDone=null;}
+            return {__handled:true};
+          });
+        }catch(e){
+          console.error('[DalOS] Failed to build pomegranate payload, falling back to legacy path:',e&&e.message);
+          /* fall through to legacy path below */
+        }
+      }
+      /* ── ATOMIC POMEGRANATE EDIT (shaky-network safe) ────────────────────
+         Header update under optimistic lock, then incremental child reconcile,
+         all-or-nothing; stale lock surfaces as CONFLICT. */
+      if(isEditMode && (newBatch.crop||'').toLowerCase()==='pomegranate'){
+        try{
+          var pep=buildPomegranateSavePayload(newBatch, userId, seasonId, true, newBatch.id);
+          return supabase.rpc('edit_pomegranate_inspection_full',{payload:pep}).then(function(res){
+            if(res.error){
+              var msg=res.error.message||'';
+              if(msg.indexOf('CONFLICT')>=0){
+                console.warn('[DalOS] Atomic pomegranate edit conflict:',msg);
+                if(onDone){onDone('CONFLICT',newBatch.id);onDone=null;}
+                return {__handled:true};
+              }
+              console.error('[DalOS] Atomic pomegranate edit failed:',msg);
+              if(onDone){onDone(mangoServerErrMsg(msg,true));onDone=null;}
+              return {__handled:true};
+            }
+            var eid=(res.data&&res.data.id)||newBatch.id;
+            console.log('[DalOS] Atomic pomegranate edit OK:',eid,res.data);
+            if(onDone){onDone(null,eid);onDone=null;}
+            try{ if(typeof refreshBatchesById==='function') setTimeout(function(){refreshBatchesById([eid]);},1200); }catch(e){}
+            return {__handled:true};
+          }).catch(function(e){
+            console.error('[DalOS] Atomic pomegranate edit threw:',e&&e.message);
+            if(onDone){onDone('RETRY:Save didn’t go through — your changes are still here. Check your connection and tap Save again.');onDone=null;}
+            return {__handled:true};
+          });
+        }catch(e){
+          console.error('[DalOS] Failed to build pomegranate edit payload, falling back to legacy edit path:',e&&e.message);
           /* fall through to legacy edit path */
         }
       }
