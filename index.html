@@ -149,6 +149,10 @@ tr.click:hover td{background:var(--bg)}
 /* INSPECTION FORM */
 .form-field{margin-bottom:10px}
 .form-label{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;display:block}
+/* Locked inspection header: children stay non-interactive, but the wrapper itself
+   receives the click so we can tell the inspector why nothing happened. */
+.hdr-locked{pointer-events:auto!important;cursor:not-allowed}
+.hdr-locked *{pointer-events:none!important}
 .form-input{width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:6px;background:var(--card);outline:none;transition:border-color .15s;font-size:14px;color:var(--text)}
 .form-input:focus{border-color:var(--accent)}
 .form-select{width:100%;padding:8px 10px;border:1px solid var(--border2);border-radius:6px;background:var(--card);outline:none;font-size:14px;color:var(--text)}
@@ -854,19 +858,22 @@ function InspectionForm(props){
     try{localStorage.removeItem(draftKey);}catch(e){}
     onClose();
   }
+  /* Snapshot lives in a ref, rebuilt every render, so the autosave always writes
+     CURRENT values. Previously it was built inside the interval closure and the
+     effect depended on a hand-maintained field list — any field missing from that
+     list (plot, cls, farm2..4, wax…) was captured stale, and the interval was torn
+     down on every keystroke so it only fired after 30s of stillness. On a remount
+     the form re-initialises from that draft, which is how a filled header came
+     back blank. */
+  var snapRef=React.useRef(null);
   React.useEffect(function(){
     if(!isDirty) return;
     var timer=setInterval(function(){
       /* ── localStorage snapshot (existing) ── */
       try{
-        var snap={lot:lot,date:date,variety:variety,category:category,varietyType:varietyType,variety2:variety2,category2:category2,client:client,country:country,farm:farm,farm2:farm2,farm3:farm3,farm4:farm4,additionalFarms:additionalFarms,plot:plot,plot2:plot2,plot3:plot3,plot4:plot4,container:container,cls:cls,wax:wax,packing:packing,labelling:labelling,cartonCompany:cartonCompany,cartonCompany2:cartonCompany2,cartonColor:cartonColor,pallets:pallets,decision:decision,
-          /* Extended fields for Supabase snapshot completeness */
-          traceCodes:traceCodes,ggn:ggn,phCode:phCode,farmCode:farmCode,netWt:netWt,
-          importer:importer,importerAddr:importerAddr,stickerImg:stickerImg,
-          extraLabels:extraLabels,hdrLocked:hdrLocked,stickerChecks:stickerChecks,
-          cartonType:cartonType,cartonCompany2:cartonCompany2,
-          grpSessionId:grpSessionId||null,
-          ts:Date.now()};
+        var snap=Object.assign({},snapRef.current,{ts:Date.now()});
+        /* Never persist an empty draft over a real one — see dalosDraftHasContent. */
+        if(!dalosDraftHasContent(snap)) return;
         localStorage.setItem(draftKey,JSON.stringify(snap));
       }catch(e){}
       /* ── Supabase save_drafts upsert (fire-and-forget) ── */
@@ -897,7 +904,11 @@ function InspectionForm(props){
       }catch(e){console.warn('[DalOS] Autosave error:',e);}
     },30000);
     return function(){clearInterval(timer);};
-  },[isDirty,lot,date,variety,client,country,farm,container,pallets,decision,grpSessionId,stickerChecks,extraLabels]);
+    /* Deps are intentionally just [isDirty]: the snapshot comes from snapRef, which
+       is current on every render, so the interval no longer needs recreating when a
+       field changes — and it now actually fires every 30s while the inspector types,
+       instead of being reset by each keystroke. */
+  },[isDirty]);
   /* MOVED UP (was defined ~140 lines below): compute restoredDraft BEFORE _d so that
      _d — and every useState() default that reads _d — actually sees the recovered
      draft. Previously restoredDraft was declared later, so at this point it was
@@ -942,6 +953,17 @@ function InspectionForm(props){
   var strace=useState((function(){var r=normTC(batch&&batch.traceCodes?batch.traceCodes:(batch&&batch.traceCode?[batch.traceCode]:[]));return r.length?r:[{code:'',variety:null}];})()); var traceCodes=strace[0]; var setTraceCodes=strace[1];
   var sdec=useState(batch?batch.decision:''); var decision=sdec[0]; var setDecision=sdec[1];
   var sHL=useState(isEdit); var hdrLocked=sHL[0]; var setHdrLocked=sHL[1];
+  /* The locked header uses pointerEvents:none, so clicks and typing are swallowed
+     with no feedback — the fields still look editable. Inspectors type into a locked
+     header, hit Save, and believe the change landed. This drives a transient notice. */
+  var sLockHint=useState(false); var lockHint=sLockHint[0]; var setLockHint=sLockHint[1];
+  var lockHintTimerRef=React.useRef(null);
+  function flashLockHint(){
+    setLockHint(true);
+    if(lockHintTimerRef.current) clearTimeout(lockHintTimerRef.current);
+    lockHintTimerRef.current=setTimeout(function(){setLockHint(false);},6000);
+  }
+  React.useEffect(function(){return function(){if(lockHintTimerRef.current) clearTimeout(lockHintTimerRef.current);};},[]);
   var sGGN=useState(batch?batch.ggn||'':''); var ggn=sGGN[0]; var setGGN=sGGN[1];
   var sCC=useState(batch?batch.cartonColor||'':''); var cartonColor=sCC[0]; var setCartonColor=sCC[1];
   var sCCo=useState(batch?batch.cartonCompany||'':''); var cartonCompany=sCCo[0]; var setCartonCompany=sCCo[1];
@@ -1077,6 +1099,15 @@ function InspectionForm(props){
       }]
     :(restoredDraft&&restoredDraft.pallets&&restoredDraft.pallets.length>0?restoredDraft.pallets:[newPallet(1)]);
   var sPallets=useState(initPallets); var pallets=sPallets[0]; var setPallets=sPallets[1];
+  /* Assigned HERE, after every useState above, not up beside the effect: these are
+     `var`s, so at the effect's position they are still hoisted-undefined and the
+     snapshot would capture nothing (regression caught on staging). */
+        snapRef.current={lot:lot,date:date,variety:variety,category:category,varietyType:varietyType,variety2:variety2,category2:category2,client:client,country:country,farm:farm,farm2:farm2,farm3:farm3,farm4:farm4,additionalFarms:additionalFarms,plot:plot,plot2:plot2,plot3:plot3,plot4:plot4,container:container,cls:cls,wax:wax,packing:packing,labelling:labelling,cartonCompany:cartonCompany,cartonCompany2:cartonCompany2,cartonColor:cartonColor,pallets:pallets,decision:decision,
+    traceCodes:traceCodes,ggn:ggn,phCode:phCode,farmCode:farmCode,netWt:netWt,
+    importer:importer,importerAddr:importerAddr,stickerImg:stickerImg,
+    extraLabels:extraLabels,hdrLocked:hdrLocked,stickerChecks:stickerChecks,
+    cartonType:cartonType,
+    grpSessionId:grpSessionId||null};
   var sDeletedPallets=useState([]); var deletedPalletIds=sDeletedPallets[0]; var setDeletedPalletIds=sDeletedPallets[1];
   var sActivePallet=useState(0); var activePalletIdx=sActivePallet[0]; var setActivePalletIdx=sActivePallet[1];
   var sExp=useState(null); var expandedRow=sExp[0]; var setExpandedRow=sExp[1];
@@ -2431,14 +2462,24 @@ function InspectionForm(props){
             ce('div',{className:'section-title-bar',style:{background:'#2b5c3f'}}),'Inspection header',
             hdrLocked&&ce('span',{style:{fontSize:10,background:'var(--green-bg)',color:'var(--green)',border:'1px solid var(--green-border)',borderRadius:10,padding:'1px 8px',marginLeft:6}},'Locked')
           ),
-          hdrLocked?ce('button',{className:'btn btn-secondary btn-sm',onClick:function(){setHdrLocked(false);}},'Unlock to edit'):ce('button',{className:'btn btn-primary btn-sm',onClick:function(){setHdrLocked(true);}},'Lock header')
+          hdrLocked?ce('button',{className:'btn btn-secondary btn-sm',
+            style:lockHint?{borderColor:'var(--amber)',boxShadow:'0 0 0 3px #e8c87a55',color:'var(--amber)'}:null,
+            onClick:function(){setHdrLocked(false);setLockHint(false);}},'Unlock to edit')
+            :ce('button',{className:'btn btn-primary btn-sm',onClick:function(){setHdrLocked(true);}},'Lock header')
+        ),
+        hdrLocked&&lockHint&&ce('div',{style:{marginBottom:10,padding:'8px 12px',background:'var(--amber-bg)',border:'1px solid var(--amber-border)',borderRadius:6,fontSize:12,color:'#7a4a10',display:'flex',alignItems:'center',gap:8}},
+          ce('span',{style:{fontSize:14}},'\uD83D\uDD12'),
+          ce('span',null,ce('strong',null,'Header is locked. '),'Tap ',ce('strong',null,'Unlock to edit'),' above before changing these fields — otherwise your changes are not saved.')
         ),
         ce('div',{style:{display:'flex',alignItems:'center',gap:10,background:packhouse.color+'0e',border:'1px solid '+packhouse.color+'30',borderRadius:8,padding:'8px 12px',marginBottom:12}},
           ce('div',{style:{width:30,height:30,borderRadius:7,background:packhouse.color,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'var(--font-mono)',fontSize:11,fontWeight:700,color:'#fff',flexShrink:0}},packhouse.initials||packhouse.id.slice(0,2)),
           ce('div',null,ce('div',{style:{fontWeight:600,fontSize:13,color:packhouse.color}},packhouse.name),ce('div',{style:{fontSize:11,color:'var(--text3)'}},'Check place: '+packhouse.id)),
           ce('div',{style:{marginLeft:'auto',fontSize:11,color:'var(--text3)',fontStyle:'italic'}},'Set at login')
         ),
-        ce('div',{style:{opacity:hdrLocked?.6:1,pointerEvents:hdrLocked?'none':'auto'}},
+        ce('div',{className:hdrLocked?'hdr-locked':null,
+          onClick:hdrLocked?flashLockHint:null,
+          title:hdrLocked?'Header is locked — tap "Unlock to edit" above':null,
+          style:{opacity:hdrLocked?.6:1}},
           ce('div',{className:'grid4',style:{marginBottom:10}},
             ce('div',{className:'form-field'},ce('label',{className:'form-label'},'Date'),ce('input',{className:'form-input',type:'date',value:date,onChange:function(e){setDate(e.target.value);}})),
             cropId==='grapes'
@@ -15408,6 +15449,27 @@ function dalosNoteConflict(id){
   if(s.count>=DALOS_CONFLICT_MAX) console.error('[DalOS] Conflict circuit-breaker OPEN for',id,'—',s.count,'consecutive conflicts; further auto re-sends blocked.');
 }
 function dalosClearConflicts(id){ if(id) delete DALOS_CONFLICT_STRIKES[id]; }
+/* An autosave snapshot with nothing in it has zero recovery value and can only do
+   harm: on any remount the form re-initialises from the draft, so persisting an
+   empty snapshot lets it blank a header the inspector has since filled in. Only
+   persist a draft that actually carries something worth recovering. */
+function dalosDraftHasContent(s){
+  if(!s) return false;
+  if(s.lot||s.container||s.farm||s.variety||s.cls||s.client||s.country||s.plot) return true;
+  var ps=s.pallets||[];
+  for(var i=0;i<ps.length;i++){
+    var p=ps[i]||{};
+    if(p.palletLabel||p.palletContainer||p.actualTraceCode) return true;
+    var rows=p.rows||[];
+    for(var j=0;j<rows.length;j++){
+      var r=rows[j]||{};
+      if(r.cartonWt||r.brix||r.brixV2||r.size||r.sampleSize||r.notes) return true;
+      var d=r.defects||{};
+      for(var k in d){ if(d[k]) return true; }
+    }
+  }
+  return false;
+}
 function dalosBreakerOpen(id){
   var s=id&&DALOS_CONFLICT_STRIKES[id];
   return !!(s&&s.count>=DALOS_CONFLICT_MAX&&(Date.now()-s.last)<DALOS_CONFLICT_WINDOW_MS);
