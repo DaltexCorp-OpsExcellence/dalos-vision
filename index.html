@@ -628,8 +628,11 @@ function Typeahead(props){
   var onChange=props.onChange||function(){};
   var options=props.options||[]; /* array of strings or {name,hint} objects */
   var placeholder=props.placeholder||'Type to search...';
-  var minChars=props.minChars||2;
+  var minChars=(props.minChars==null?2:props.minChars); /* honor minChars:0 (0||2 bug) */
   var disabled=props.disabled||false;
+  /* allowFree: commit typed text even when it matches no option (pick-or-type combobox).
+     Default off preserves the select-only behaviour client/carton-color rely on. */
+  var allowFree=props.allowFree||false;
 
   var sQ=useState(value?value:''); var q=sQ[0]; var setQ=sQ[1];
   var sOpen=useState(false); var open=sOpen[0]; var setOpen=sOpen[1];
@@ -649,6 +652,8 @@ function Typeahead(props){
   }
 
   function handleKey(e){
+    /* allowFree: Enter commits the typed value unless a suggestion is highlighted */
+    if(e.key==='Enter'&&allowFree&&!(open&&activeIdx>=0&&filtered[activeIdx])){onChange(q);setOpen(false);e.preventDefault();return;}
     if(!open) return;
     if(e.key==='ArrowDown'){setActiveIdx(function(i){return Math.min(i+1,filtered.length-1);});e.preventDefault();}
     if(e.key==='ArrowUp'){setActiveIdx(function(i){return Math.max(i-1,0);});e.preventDefault();}
@@ -678,10 +683,13 @@ function Typeahead(props){
         setQ(e.target.value);
         setOpen(true);
         setActiveIdx(-1);
-        if(!e.target.value) onChange('');
+        /* Clear commits immediately. For allowFree we DON'T commit per-keystroke —
+           that re-renders the parent and collapses the open dropdown. Free text is
+           committed on blur / Enter instead (see onBlur + handleKey). */
+        if(!e.target.value){onChange('');}
       },
       onFocus:function(){if(q.length>=minChars) setOpen(true);},
-      onBlur:function(){setTimeout(function(){setOpen(false);},180);},
+      onBlur:function(){if(allowFree&&q!==value)onChange(q);setTimeout(function(){setOpen(false);},180);},
       onKeyDown:handleKey
     }),
     open&&filtered.length>0&&ce('div',{style:{
@@ -733,6 +741,27 @@ function InspectionForm(props){
   var config=props.config||INITIAL_CONFIG;
   var allBatches=props.batches||[];
   var isEdit=!!batch;
+
+  /* ── Land Cloud plot picker (citrus prototype) ── pull ACTIVE plot codes per farm
+     from farm_blocks (shared farms table = same farm_id Vision writes). Plot fields
+     then offer the chosen farm's registered plots, but stay free-type (allowFree) for
+     farms/plots not yet in Land Cloud. One tiny RPC call per form open. */
+  var sPlotsByFarm=useState({}); var plotsByFarm=sPlotsByFarm[0]; var setPlotsByFarm=sPlotsByFarm[1];
+  React.useEffect(function(){
+    if(cropId!=='citrus') return;
+    var cancelled=false;
+    supabase.rpc('get_farm_plots',{p_product_id:'citrus'}).then(function(r){
+      if(cancelled||r.error||!r.data) return;
+      var m={}; r.data.forEach(function(row){ (m[row.farm_id]=m[row.farm_id]||[]).push(row.plot_code); });
+      setPlotsByFarm(m);
+    });
+    return function(){cancelled=true;};
+  },[cropId]);
+  function plotsForFarm(farmName){
+    var idMap=config.farmsIdMap||{};
+    var fid=farmName&&idMap[farmName];
+    return (fid&&plotsByFarm[fid])||[];
+  }
 
   /* Warn before browser navigation while form is open */
   React.useEffect(function(){
@@ -2524,7 +2553,9 @@ function InspectionForm(props){
             /* Plot (grapes + citrus + mango) */
             (cropId==='grapes'||cropId==='citrus'||cropId==='mango'||cropId==='pomegranate')&&ce('div',{className:'form-field'},
               ce('label',{className:'form-label'},'Plot'),
-              ce('input',{className:'form-input',value:plot,placeholder:'Plot no.',onChange:function(e){setPlot(e.target.value);}})
+              (cropId==='citrus'
+                ?ce(Typeahead,{value:plot,onChange:setPlot,options:plotsForFarm(farm),placeholder:plotsForFarm(farm).length?'Pick or type plot…':'Plot no.',minChars:0,allowFree:true})
+                :ce('input',{className:'form-input',value:plot,placeholder:'Plot no.',onChange:function(e){setPlot(e.target.value);}}))
             )
           ),
           /* Farm 2 + Plot 2 — + button toggle */
@@ -2551,7 +2582,9 @@ function InspectionForm(props){
                 ),
                 ce('div',{className:'form-field'},
                   ce('label',{className:'form-label'},'Plot 2'),
-                  ce('input',{className:'form-input',value:plot2,placeholder:'Plot no.',onChange:function(e){setPlot2(e.target.value);}})
+                  (cropId==='citrus'
+                    ?ce(Typeahead,{value:plot2,onChange:setPlot2,options:plotsForFarm(farm2),placeholder:plotsForFarm(farm2).length?'Pick or type plot…':'Plot no.',minChars:0,allowFree:true})
+                    :ce('input',{className:'form-input',value:plot2,placeholder:'Plot no.',onChange:function(e){setPlot2(e.target.value);}}))
                 )
               )
           ),
@@ -2579,7 +2612,9 @@ function InspectionForm(props){
                 ),
                 ce('div',{className:'form-field'},
                   ce('label',{className:'form-label'},'Plot 3'),
-                  ce('input',{className:'form-input',value:plot3,placeholder:'Plot no.',onChange:function(e){setPlot3(e.target.value);}})
+                  (cropId==='citrus'
+                    ?ce(Typeahead,{value:plot3,onChange:setPlot3,options:plotsForFarm(farm3),placeholder:plotsForFarm(farm3).length?'Pick or type plot…':'Plot no.',minChars:0,allowFree:true})
+                    :ce('input',{className:'form-input',value:plot3,placeholder:'Plot no.',onChange:function(e){setPlot3(e.target.value);}}))
                 )
               )
           ),
@@ -2607,7 +2642,9 @@ function InspectionForm(props){
                 ),
                 ce('div',{className:'form-field'},
                   ce('label',{className:'form-label'},'Plot 4'),
-                  ce('input',{className:'form-input',value:plot4,placeholder:'Plot no.',onChange:function(e){setPlot4(e.target.value);}})
+                  (cropId==='citrus'
+                    ?ce(Typeahead,{value:plot4,onChange:setPlot4,options:plotsForFarm(farm4),placeholder:plotsForFarm(farm4).length?'Pick or type plot…':'Plot no.',minChars:0,allowFree:true})
+                    :ce('input',{className:'form-input',value:plot4,placeholder:'Plot no.',onChange:function(e){setPlot4(e.target.value);}}))
                 )
               )
           ),
@@ -2637,7 +2674,12 @@ function InspectionForm(props){
                 ),
                 ce('div',{className:'form-field'},
                   ce('label',{className:'form-label'},'Plot '+(5+aidx)),
-                  ce('input',{className:'form-input',value:af.plot||'',placeholder:'Plot no.',
+                  cropId==='citrus'
+                  ?ce(Typeahead,{value:af.plot||'',options:(af.farmId&&plotsByFarm[af.farmId])||[],placeholder:((af.farmId&&plotsByFarm[af.farmId])||[]).length?'Pick or type plot…':'Plot no.',minChars:0,allowFree:true,
+                    onChange:function(i){return function(v){
+                      setAdditionalFarms(function(prev){return prev.map(function(x,idx){return idx===i?Object.assign({},x,{plot:v}):x;});});
+                    };}(aidx)})
+                  :ce('input',{className:'form-input',value:af.plot||'',placeholder:'Plot no.',
                     onChange:function(i){return function(e){
                       setAdditionalFarms(function(prev){return prev.map(function(x,idx){return idx===i?Object.assign({},x,{plot:e.target.value}):x;});});
                     };}(aidx)
@@ -3302,6 +3344,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                         }
                         /* Single variety */
                         var selFarm=ef.sampleFarm||'';
+                        var curPlot=ef.samplePlot||'';
                         var plotOpts=[];
                         if(selFarm===farm&&plot) plotOpts.push(plot);
                         if(selFarm===farm2&&plot2) plotOpts.push(plot2);
@@ -3309,7 +3352,6 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                         if(selFarm===farm4&&plot4) plotOpts.push(plot4);
                         additionalFarms.forEach(function(af){if(selFarm===af.farmName&&af.plot)plotOpts.push(af.plot);});
                         if(!selFarm){if(plot)plotOpts.push(plot);if(plot2)plotOpts.push(plot2);if(plot3)plotOpts.push(plot3);if(plot4)plotOpts.push(plot4);additionalFarms.forEach(function(af){if(af.plot)plotOpts.push(af.plot);});}
-                        var curPlot=ef.samplePlot||'';
                         return ce('select',{style:{padding:'3px 4px',border:(pfTried[row.id]&&!curPlot)?'1.5px solid var(--red)':'1px solid var(--border2)',borderRadius:4,fontSize:11,background:(pfTried[row.id]&&!curPlot)?'var(--red-bg)':'var(--card)',width:'100%'},
                           value:curPlot,
                           onChange:function(i,id){return function(e){
@@ -3660,9 +3702,9 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
               var showWaxCol=(cropId==='citrus');
               /* Citrus: a per-sample Packing Date (auto = today) alongside the adjustable Op. Date, to track storage days before packing */
               var showPackDate=(cropId==='citrus');
-              var gridTpl=(showExpandCol?'26px ':'')+(showFarmCol?'104px 66px ':'')+'90px 100px '+(showPackDate?'100px ':'')+'70px 60px 60px 60px '+(isMangoTbl?'60px ':'')+(showWaxCol?'70px ':'')+secCols+' 1fr 54px '+(showExpandCol?'':'22px ')+'22px';
+              var gridTpl=(showExpandCol?'26px ':'')+(showFarmCol?'104px 66px ':'')+'90px 100px '+(showPackDate?'100px ':'')+'70px 60px 60px 60px '+(isMangoTbl?'60px ':'')+(showWaxCol?'70px ':'')+secCols+' 120px 54px '+(showExpandCol?'':'22px ')+'22px';
               var hdrLabels=(showExpandCol?['']:[]).concat(showFarmCol?['Farm','Plot']:[]).concat(['Time','Op. Date']).concat(showPackDate?['Pack Date']:[]).concat(['Sample #','Size',(cropId==='citrus'?'Net\nWeight':'Wt (kg)'),'Brix']).concat(isMangoTbl?['Firm']:[]).concat(showWaxCol?['Wax']:[]).concat(defSections.map(function(s){return (s.section||s.name||'Defect').split(' ')[0];})).concat(showExpandCol?['Notes','P/F','']:['Notes','P/F','▼','']);
-              return ce('div',{style:{minWidth:showPackDate?1240:(showFarmCol?1140:900)}},
+              return ce('div',{style:{minWidth:'max-content'}},
                 ce('div',{style:{display:'grid',gridTemplateColumns:gridTpl,gap:4,padding:'5px 14px',background:'var(--bg2)',borderBottom:'1px solid var(--border2)'}},
                   hdrLabels.map(function(h,i){return ce('div',{key:i,style:{fontSize:10,fontWeight:600,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.04em',whiteSpace:'pre-line',lineHeight:1.15,textAlign:i>=((showExpandCol?1:0)+(showFarmCol?2:0)+6+(showPackDate?1:0)+(isMangoTbl?1:0)+(showWaxCol?1:0))?'center':'left'}},h);})
                 ),
@@ -3697,6 +3739,8 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                       showFarmCol&&(function(){
                         var ef=row.extraFields||{};
                         var selFarm=ef.sampleFarm||'';
+                        /* Per-sample plot = the plot(s) set in the HEADER for the chosen sample farm
+                           (header is where Land Cloud plots are picked; sample just chooses among them) */
                         var plotOpts=[];
                         if(selFarm===farm&&plot) plotOpts.push(plot);
                         if(selFarm===farm2&&plot2) plotOpts.push(plot2);
@@ -3732,7 +3776,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                           ce('div',{style:{fontSize:8,color:secOver?'var(--red)':secText,opacity:.7}},sec.items.length+' items')
                         );
                       }),
-                      isMangoTbl
+                      (isMangoTbl||cropId==='citrus')
                       ?ce('div',{
                           onMouseEnter:function(e){
                             var popup=document.getElementById('mnp-'+row.id);
@@ -4136,6 +4180,7 @@ null /* GGN, PH code, Farm code, Net weight moved to header — removed from sti
                     ),
                     cropId==='citrus'&&(function(){
                       var ef=row.extraFields||{};var selFarm=ef.sampleFarm||'';var plotOpts=[];
+                      /* Per-sample plot = the plot(s) set in the HEADER for the chosen sample farm */
                       if(selFarm===farm&&plot) plotOpts.push(plot);
                       if(selFarm===farm2&&plot2) plotOpts.push(plot2);
                       if(selFarm===farm3&&plot3) plotOpts.push(plot3);
