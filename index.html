@@ -781,10 +781,19 @@ function InspectionForm(props){
     });
     return function(){cancelled=true;};
   },[cropId]);
+  /* Plot alias — some farms are the same physical location registered under a different
+     name in Land Cloud. Selecting the "mask" farm surfaces the aliased farm's plots too
+     (combined). Non-destructive: purely a client-side plot-lookup merge; Land Cloud and the
+     farms table are untouched, and both farm names stay independently selectable. */
+  var PLOT_ALIAS_BY_NAME={ 'Hana':['Badr'] }; /* pick Hana -> show Hana + Badr plots */
   function plotsForFarm(farmName){
     var idMap=config.farmsIdMap||{};
     var fid=farmName&&idMap[farmName];
-    return (fid&&plotsByFarm[fid])||[];
+    var out=((fid&&plotsByFarm[fid])||[]).slice();
+    var extras=(farmName&&PLOT_ALIAS_BY_NAME[farmName])||[];
+    extras.forEach(function(en){var eid=idMap[en];((eid&&plotsByFarm[eid])||[]).forEach(function(p){if(out.indexOf(p)===-1)out.push(p);});});
+    out.sort(function(a,b){return String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:'base'});});
+    return out;
   }
 
   /* Guard: saving into a season that isn't the current active one prompts a confirm. */
