@@ -8297,9 +8297,9 @@ function ExportView(props){
 ═══════════════════════════════════════ */
 var ROLES = {
   admin:       {label:'Admin',                color:'#1e2d22',badge:'#2b5c3f',
-                perms:{viewFG:true, createFG:true, editFG:true, approveFG:true,viewClientQC:true,createClientQC:true,viewExport:true,viewAnalytics:true,viewAdmin:true, viewConfig:true, viewEscalation:true, escalate:true, allPackhouses:true, viewShipments:true, giveAccess:true}},
+                perms:{viewFG:true, createFG:true, editFG:true, approveFG:true,viewClientQC:true,createClientQC:true,viewExport:true,viewAnalytics:true,viewAdmin:true, viewConfig:true, viewEscalation:true, escalate:true, allPackhouses:true, viewShipments:true, viewCRM:true, editCRM:true, viewLeads:true, editLeadStatus:true, manageLeads:true, giveAccess:true}},
   power_user:  {label:'Power User',           color:'#0f5a52',badge:'#159085',
-                perms:{viewFG:true, createFG:true, editFG:true, approveFG:true,viewClientQC:true,createClientQC:true,viewExport:true,viewAnalytics:true,viewAdmin:true, viewConfig:true, viewEscalation:true, escalate:true, allPackhouses:true, viewShipments:true, giveAccess:false}},
+                perms:{viewFG:true, createFG:true, editFG:true, approveFG:true,viewClientQC:true,createClientQC:true,viewExport:true,viewAnalytics:true,viewAdmin:true, viewConfig:true, viewEscalation:true, escalate:true, allPackhouses:true, viewShipments:true, viewCRM:true, editCRM:true, viewLeads:true, editLeadStatus:true, manageLeads:true, giveAccess:false}},
   board:       {label:'Senior Board',         color:'#2a0a5a',badge:'#6a10b0',
                 perms:{viewFG:true, createFG:false,editFG:false,approveFG:false,viewClientQC:true,createClientQC:false,viewExport:false,viewAnalytics:true,viewAdmin:false,viewConfig:false,viewEscalation:true, escalate:false,allPackhouses:true, viewShipments:true}},
   qc_manager:  {label:'QC Manager',           color:'#2b5c3f',badge:'#4a8c62',
@@ -8311,7 +8311,7 @@ var ROLES = {
   inspector:   {label:'Inspector',            color:'#3a6a3a',badge:'#5a9a5a',
                 perms:{viewFG:true, createFG:true, editFG:false,approveFG:false,viewClientQC:false,createClientQC:false,viewExport:false,viewAnalytics:false,viewAdmin:false,viewConfig:false,viewEscalation:false,escalate:false,allPackhouses:false, viewShipments:false}},
   commercial:  {label:'Commercial / Export',  color:'#7a5010',badge:'#b87820',
-                perms:{viewFG:true, createFG:false,editFG:false,approveFG:false,viewClientQC:true,createClientQC:true,viewExport:true,viewAnalytics:true,viewAdmin:false,viewConfig:false,viewEscalation:false,escalate:false,allPackhouses:true, viewShipments:true}},
+                perms:{viewFG:true, createFG:false,editFG:false,approveFG:false,viewClientQC:true,createClientQC:true,viewExport:true,viewAnalytics:true,viewAdmin:false,viewConfig:false,viewEscalation:false,escalate:false,allPackhouses:true, viewShipments:true, viewCRM:true, editCRM:true, viewLeads:true, editLeadStatus:true}},
   marketing:   {label:'Marketing',             color:'#6a2ca0',badge:'#9a5ad0',
                 perms:{viewFG:false,createFG:false,editFG:false,approveFG:false,viewClientQC:false,createClientQC:false,viewExport:false,viewAnalytics:false,viewAdmin:false,viewConfig:false,viewEscalation:false,escalate:false,allPackhouses:false,viewShipments:false,viewCRM:true, editCRM:false,viewLeads:true, editLeadStatus:true, manageLeads:true}},
   client_qc:   {label:'Client QC Management',color:'#1a4a7a',badge:'#2a6aaa',
@@ -8533,6 +8533,11 @@ function AdminCenter(props){
   var sEmailModal=useState(null); var emailModal=sEmailModal[0]; var setEmailModal=sEmailModal[1];
   var sResetTarget=useState(null); var resetTarget=sResetTarget[0]; var setResetTarget=sResetTarget[1];
   var sResetPw=useState(''); var resetPw=sResetPw[0]; var setResetPw=sResetPw[1];
+  /* CRM region access (region_members) — mirrors packhouse access */
+  var sRegionsList=useState([]); var regionsList=sRegionsList[0]; var setRegionsList=sRegionsList[1];
+  var sRegionMembers=useState({}); var regionMembers=sRegionMembers[0]; var setRegionMembers=sRegionMembers[1];
+  /* uid -> [region ids where this user is the region MANAGER] (region_members.is_manager) */
+  var sRegionManagers=useState({}); var regionManagers=sRegionManagers[0]; var setRegionManagers=sRegionManagers[1];
 
   /* config editing state */
   var sCfgTab=useState('packhouses'); var cfgTab=sCfgTab[0]; var setCfgTab=sCfgTab[1];
@@ -8727,6 +8732,47 @@ function AdminCenter(props){
       return Object.assign({},u,{packhouses:newPhs});
     });});
   }
+  React.useEffect(function(){
+    if(!canGiveAccess) return;
+    supabase.from('regions').select('id,label,is_bucket').order('is_bucket').order('label').then(function(r){ if(r.data) setRegionsList(r.data); });
+    supabase.from('region_members').select('user_id,region_id,is_manager').then(function(r){
+      if(r.data){ var m={},mg={}; r.data.forEach(function(x){ (m[x.user_id]=m[x.user_id]||[]).push(x.region_id); if(x.is_manager)(mg[x.user_id]=mg[x.user_id]||[]).push(x.region_id); }); setRegionMembers(m); setRegionManagers(mg); }
+    });
+  },[canGiveAccess]);
+  var regionLabelById={}; regionsList.forEach(function(r){ regionLabelById[r.id]=r.label; });
+  /* Incremental membership writes — add/remove only the affected rows. The old delete-all +
+     reinsert path silently reset is_manager on every row, so promoting a manager here (or in
+     Commercial) was wiped the next time an admin edited their region access. Never delete-all. */
+  function toggleRegionForUser(uid,regionId){
+    var cur=(regionMembers[uid]||[]).slice();
+    var allIds=regionsList.map(function(r){return r.id;});
+    var next,toAdd=[],toDel=[];
+    if(regionId==='__all'){
+      if(allIds.length&&cur.length>=allIds.length){ next=[]; toDel=cur.slice(); }
+      else { next=allIds.slice(); toAdd=allIds.filter(function(x){return cur.indexOf(x)<0;}); }
+    } else {
+      var i=cur.indexOf(regionId);
+      if(i>=0){ next=cur.filter(function(x){return x!==regionId;}); toDel=[regionId]; }
+      else { next=cur.concat([regionId]); toAdd=[regionId]; }
+    }
+    setRegionMembers(function(prev){var c=Object.assign({},prev); c[uid]=next; return c;});
+    /* dropping a region also drops any manager flag it carried */
+    if(toDel.length) setRegionManagers(function(prev){var c=Object.assign({},prev); c[uid]=(c[uid]||[]).filter(function(x){return toDel.indexOf(x)<0;}); return c;});
+    if(toAdd.length){
+      var inserts=toAdd.map(function(rid){return {user_id:uid,region_id:rid,is_manager:false};});
+      supabase.from('region_members').upsert(inserts,{onConflict:'user_id,region_id'}).then(function(r){ if(r.error) console.error('[DalOS] region add error:',r.error.message); });
+    }
+    toDel.forEach(function(rid){ supabase.from('region_members').delete().eq('user_id',uid).eq('region_id',rid).then(function(r){ if(r&&r.error) console.error('[DalOS] region del error:',r.error.message); }); });
+  }
+  /* Promote/demote a user as MANAGER of one of their regions. Targeted UPDATE on the (user_id,
+     region_id) PK row — preserves every other row. */
+  function toggleManagerForUser(uid,regionId){
+    var cur=(regionManagers[uid]||[]).slice();
+    var flag=cur.indexOf(regionId)<0;
+    var next=flag?cur.concat([regionId]):cur.filter(function(x){return x!==regionId;});
+    setRegionManagers(function(prev){var c=Object.assign({},prev); c[uid]=next; return c;});
+    supabase.from('region_members').update({is_manager:flag}).eq('user_id',uid).eq('region_id',regionId).then(function(r){ if(r&&r.error) console.error('[DalOS] manager toggle error:',r.error.message); });
+  }
   function doResetPassword(){
     if(!resetPw.trim()||!resetTarget) return;
     var u=users.find(function(x){return x.id===resetTarget;});
@@ -8876,7 +8922,7 @@ function AdminCenter(props){
     canGiveAccess&&tab==='users'&&ce('div',{className:'scroll-card'},
       ce('div',{style:{overflowX:'auto',WebkitOverflowScrolling:'touch'}},
       ce('table',{style:{minWidth:700}},
-        ce('thead',null,ce('tr',null,ce('th',null,'Name'),ce('th',null,'Email'),ce('th',null,'Role'),ce('th',null,'Packhouse access'),ce('th',null,'Last login'),ce('th',null,'Status'),ce('th',null,'Actions'))),
+        ce('thead',null,ce('tr',null,ce('th',null,'Name'),ce('th',null,'Email'),ce('th',null,'Role'),ce('th',null,'Packhouse access'),ce('th',null,'Region access'),ce('th',null,'Last login'),ce('th',null,'Status'),ce('th',null,'Actions'))),
         ce('tbody',null,
           users.map(function(u){
             var r=ROLES[u.role]||{label:u.role,badge:'#888'};
@@ -8911,6 +8957,36 @@ function AdminCenter(props){
                         :userPHs.map(function(ph){return ce('span',{key:ph,style:{fontSize:10,padding:'1px 7px',borderRadius:10,background:'var(--accent)18',color:'var(--accent)',border:'1px solid var(--accent)30',fontWeight:500}},ph);})
                     )
               ),
+              /* Region access cell (CRM) — mirrors packhouse access */
+              (function(){
+                var rperms=(ROLES[u.role]||{}).perms||{};
+                if(!rperms.viewCRM) return ce('td',null,ce('span',{style:{fontSize:11,color:'var(--text3)',fontStyle:'italic'}},'— no CRM access'));
+                if(u.role==='admin'||u.role==='power_user') return ce('td',null,ce('span',{style:{fontSize:11,color:'var(--text3)',fontStyle:'italic'}},'All regions · '+(u.role==='admin'?'admin':'role')));
+                var mem=regionMembers[u.id]||[];
+                var allIds=regionsList.map(function(r){return r.id;});
+                var hasAllR=allIds.length>0&&mem.length>=allIds.length;
+                var mgrOf=regionManagers[u.id]||[];
+                if(isEdit) return ce('td',null,
+                  ce('div',{style:{display:'flex',flexWrap:'wrap',gap:4}},
+                    ce('button',{className:'btn btn-sm',style:{fontSize:10,background:hasAllR?'var(--accent)':'var(--bg2)',color:hasAllR?'#fff':'var(--text3)',border:'1px solid '+(hasAllR?'var(--accent)':'var(--border2)')},onClick:function(){toggleRegionForUser(u.id,'__all');}},'All'),
+                    regionsList.map(function(rg){
+                      var sel=mem.indexOf(rg.id)>=0;
+                      return ce('button',{key:rg.id,className:'btn btn-sm',style:{fontSize:10,background:sel?'var(--accent)':'var(--bg2)',color:sel?'#fff':'var(--text3)',border:'1px solid '+(sel?'var(--accent)':'var(--border2)')},onClick:function(){toggleRegionForUser(u.id,rg.id);}},rg.label);
+                    })
+                  ),
+                  /* manager toggle — only for regions this user actually belongs to */
+                  mem.length?ce('div',{style:{display:'flex',flexWrap:'wrap',gap:4,marginTop:5,alignItems:'center'}},
+                    ce('span',{style:{fontSize:9,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.04em',marginRight:2}},'Manager of'),
+                    mem.map(function(rid){
+                      var isMgr=mgrOf.indexOf(rid)>=0;
+                      return ce('button',{key:'m'+rid,className:'btn btn-sm',title:isMgr?'Region manager — click to revoke':'Click to make region manager',style:{fontSize:10,background:isMgr?'var(--amber)':'var(--bg2)',color:isMgr?'#fff':'var(--text3)',border:'1px solid '+(isMgr?'var(--amber)':'var(--border2)')},onClick:function(){toggleManagerForUser(u.id,rid);}},(isMgr?'★ ':'☆ ')+(regionLabelById[rid]||rid));
+                    })
+                  ):null
+                );
+                if(!mem.length) return ce('td',null,ce('span',{style:{fontSize:11,color:'var(--amber)',fontStyle:'italic'}},'No regions — sees nothing'));
+                if(hasAllR) return ce('td',null,ce('span',{style:{fontSize:11,color:'var(--text3)'}},'All regions'));
+                return ce('td',null,ce('div',{style:{display:'flex',flexWrap:'wrap',gap:4}},mem.map(function(rid){var isMgr=mgrOf.indexOf(rid)>=0;return ce('span',{key:rid,title:isMgr?'Region manager':'',style:{fontSize:10,padding:'1px 8px',borderRadius:10,background:isMgr?'var(--amber-bg)':'var(--bg2)',color:isMgr?'var(--amber)':'var(--accent)',border:'1px solid '+(isMgr?'var(--amber-border)':'var(--border2)'),fontWeight:500}},(isMgr?'★ ':'')+(regionLabelById[rid]||rid));})));
+              })(),
               ce('td',{style:{fontSize:11,color:'var(--text3)',fontFamily:'var(--font-mono)',whiteSpace:'nowrap'}},fmtLastLogin(u.lastLogin)),
               ce('td',null,ce('span',{className:'badge badge-'+(u.active?'pass':'neutral')},u.active?'Active':'Inactive')),
               ce('td',null,ce('div',{style:{display:'flex',gap:5,flexWrap:'wrap'}},
